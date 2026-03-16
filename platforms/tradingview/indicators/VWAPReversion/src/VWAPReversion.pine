@@ -1,0 +1,13 @@
+﻿//@version=5
+indicator("VWAP Reversion (Example)", overlay=true)
+
+// NOTE: This is a minimal example for repository structure.
+// Validate all logic and assumptions before any live use.
+
+len = input.int(20, "Length", minval=1)
+
+v = ta.vwap(hlc3)
+ma = ta.sma(close, len)
+
+plot(v, "VWAP", color=color.orange)
+plot(ma, "SMA", color=color.blue)

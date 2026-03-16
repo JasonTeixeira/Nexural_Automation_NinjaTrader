@@ -1,0 +1,16 @@
+﻿name: IndicatorNameHere
+type: indicator
+platform: ninjatrader
+language: csharp
+status: experimental
+owner: contributor-github-handle
+maintainer: Jason Teixeira / Nexural
+version: 0.1.0
+created: 2026-03-15
+updated: 2026-03-15
+
+tags:
+  - orderflow
+
+dependencies:
+  - none

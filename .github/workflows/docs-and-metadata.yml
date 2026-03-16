@@ -1,0 +1,65 @@
+﻿name: docs-and-metadata
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+
+jobs:
+  markdown-links:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Link check (README + docs)
+        uses: lycheeverse/lychee-action@v1
+        with:
+          # Check markdown files for links. Keep it light early on.
+          args: >-
+            --verbose
+            --no-progress
+            --accept 200,204,206,301,302,303,307,308
+            --exclude-mail
+            --max-concurrency 8
+            "**/*.md"
+
+  metadata-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate metadata.yaml presence for modules
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Scanning for module folders..."
+
+          # A module folder is any directory containing metadata.yaml.
+          # For now we only assert that any module folder has required companion files.
+          # This prevents half-finished module PRs.
+
+          missing=0
+          while IFS= read -r meta; do
+            dir=$(dirname "$meta")
+            for f in README.md parameters.md notes.md changelog.md; do
+              if [ ! -f "$dir/$f" ]; then
+                echo "Missing $f in $dir"
+                missing=1
+              fi
+            done
+            for d in src screenshots test-results; do
+              if [ ! -d "$dir/$d" ]; then
+                echo "Missing directory $d in $dir"
+                missing=1
+              fi
+            done
+          done < <(find platforms templates -name metadata.yaml -type f 2>/dev/null || true)
+
+          if [ "$missing" -ne 0 ]; then
+            echo "Metadata validation failed."
+            exit 1
+          fi
+
+          echo "Metadata validation passed."

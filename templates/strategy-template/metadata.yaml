@@ -1,0 +1,31 @@
+﻿# Module metadata (YAML)
+# Keep this file accurate—it's used for catalogs and validation.
+
+name: StrategyNameHere
+type: strategy
+platform: ninjatrader
+language: csharp
+status: experimental # experimental | stable | archived
+owner: contributor-github-handle
+maintainer: Jason Teixeira / Nexural
+version: 0.1.0
+created: 2026-03-15
+updated: 2026-03-15
+
+tags:
+  - orderflow
+  - futures
+
+instruments:
+  - ES
+
+timeframes:
+  - "2000t"
+
+dependencies:
+  - none
+
+risk:
+  max_daily_loss: null
+  max_trades_per_day: null
+  notes: "Document risk controls and assumptions in README."
