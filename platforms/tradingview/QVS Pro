@@ -1,0 +1,496 @@
+//@version=6
+indicator("QVS Pro™ - Raw Volatility Edition", "QVS Pro Raw", overlay=false, precision=2, max_bars_back=500)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INPUTS & CONFIGURATION
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Core Settings
+g_core = "Core Settings"
+i_regime_lookback = input.int(100, "Regime Lookback", minval=50, maxval=200, group=g_core)
+i_show_table = input.bool(true, "Show Status Table", group=g_core)
+i_show_heatmap = input.bool(true, "Show Heat Map", group=g_core)
+
+// NQ-Specific Settings (from your ATR system)
+g_nq = "NQ Optimization"
+i_use_nq_opt = input.bool(true, "Use NQ Optimization", group=g_nq)
+i_session_weights = input.bool(true, "Weight by Session", group=g_nq)
+i_gap_adjustment = input.bool(true, "Adjust for Gaps", group=g_nq)
+
+// Advanced ATR Settings
+g_atr = "Advanced ATR Engine"
+enable_advanced_atr = input.bool(true, "Enable Advanced ATR", group=g_atr)
+advanced_sensitivity = input.float(1.0, "Advanced Sensitivity", minval=0.5, maxval=2.0, step=0.1, group=g_atr)
+adaptive_strength = input.float(1.0, "Adaptive Strength", minval=0.5, maxval=2.0, step=0.1, group=g_atr)
+volume_integration = input.float(1.0, "Volume Integration", minval=0.1, maxval=3.0, step=0.1, group=g_atr)
+
+// Visual Settings
+g_visual = "Visual Settings"
+i_bull_color = input.color(color.rgb(0, 255, 136), "Low Vol/Bullish", group=g_visual)
+i_bear_color = input.color(color.rgb(255, 51, 102), "High Vol/Bearish", group=g_visual)
+i_neutral_color = input.color(color.rgb(255, 170, 0), "Neutral", group=g_visual)
+i_bg_transp = input.int(92, "Background Transparency", minval=80, maxval=100, group=g_visual)
+
+// Volatility Parameters
+g_vol = "Volatility Parameters"
+i_atr_fast = input.int(7, "Fast ATR", minval=3, maxval=20, group=g_vol)
+i_atr_med = input.int(21, "Medium ATR", minval=10, maxval=50, group=g_vol)
+i_atr_slow = input.int(50, "Slow ATR", minval=30, maxval=100, group=g_vol)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// NQ-SPECIFIC FUNCTIONS (from your ATR system)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Session detection for NQ
+is_ny_session() =>
+    not na(time(timeframe.period, "0930-1600", "America/New_York"))
+
+is_globex_session() =>
+    not is_ny_session()
+
+// Gap-adjusted True Range for NQ
+gap_adjusted_tr(gap_adjust_enabled) =>
+    regular_tr = ta.tr(true)
+    if gap_adjust_enabled and i_use_nq_opt
+        gap_size = math.abs(open - close[1])
+        gap_threshold = ta.atr(20) * 0.5
+        if gap_size > gap_threshold and not na(close[1])
+            adjusted_tr = regular_tr * 0.7 + ta.atr(20) * 0.3
+            adjusted_tr
+        else
+            regular_tr
+    else
+        regular_tr
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ADVANCED MATHEMATICAL FUNCTIONS (NO SMOOTHING)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Custom EMA function for ONLY the adaptive period calculation
+custom_ema(src, len) =>
+    safe_len = na(len) or len <= 0 ? 14.0 : len
+    safe_len := math.max(2.0, math.min(50.0, safe_len))
+    safe_src = na(src) ? close : src
+    
+    alpha = 2.0 / (safe_len + 1.0)
+    var float ema_val = na
+    if na(ema_val) or bar_index < 10
+        ema_val := safe_src
+    else
+        ema_val := alpha * safe_src + (1.0 - alpha) * ema_val
+    
+    na(ema_val) ? safe_src : ema_val
+
+// Adaptive Period Selection
+calculate_optimal_period() =>
+    returns = ta.change(close) / math.max(close[1], 0.0001)
+    abs_returns = math.abs(returns)
+    
+    returns_std = ta.stdev(returns, 20)
+    mean_abs_returns = ta.sma(abs_returns, 20)
+    
+    safe_returns_std = na(returns_std) or returns_std <= 0 ? 0.02 : returns_std
+    safe_mean_abs_returns = na(mean_abs_returns) or mean_abs_returns <= 0 ? 0.01 : mean_abs_returns
+    
+    market_efficiency = safe_returns_std / safe_mean_abs_returns
+    
+    base_period = 14.0
+    efficiency_factor = math.max(0.5, math.min(2.0, market_efficiency))
+    optimal_period = math.round(base_period * (0.5 + efficiency_factor * adaptive_strength))
+    
+    final_period = math.max(5.0, math.min(30.0, optimal_period))
+    float(na(final_period) ? 14.0 : final_period)
+
+// Garman-Klass Estimator (RAW)
+garman_klass_estimator() =>
+    safe_high = math.max(high, close)
+    safe_low = math.min(low, close)
+    safe_open = na(open) ? close : open
+    safe_close = close
+    
+    log_hl = math.log(math.max(safe_high / safe_low, 1.0001))
+    log_co = math.log(math.max(safe_close / safe_open, 1.0001))
+    
+    gk_vol = 0.5 * log_hl * log_hl - (2 * math.log(2) - 1) * log_co * log_co
+    gk_atr = math.sqrt(math.max(0, gk_vol)) * safe_close
+    
+    traditional_range = safe_high - safe_low
+    result = na(gk_atr) or gk_atr <= 0 ? traditional_range : math.max(gk_atr, traditional_range)
+    
+    math.max(result, 0.0001)
+
+// Volume-Weighted True Range (RAW)
+volume_weighted_true_range() =>
+    tr1 = high - low
+    tr2 = math.abs(high - close[1])
+    tr3 = math.abs(low - close[1])
+    true_range = math.max(tr1, math.max(tr2, tr3))
+    
+    volume_sma = ta.sma(volume, 20)
+    safe_volume_sma = na(volume_sma) or volume_sma <= 0 ? volume : volume_sma
+    volume_factor = volume / safe_volume_sma
+    
+    safe_volume_integration = math.max(0.1, math.min(3.0, volume_integration))
+    adjusted_volume_factor = math.pow(math.max(0.1, volume_factor), safe_volume_integration)
+    
+    vw_true_range = true_range * math.max(0.1, math.min(5.0, adjusted_volume_factor))
+    
+    result = na(vw_true_range) or vw_true_range <= 0 ? true_range : vw_true_range
+    math.max(result, 0.0001)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ADVANCED ATR MASTER FUNCTION (RAW - NO SMOOTHING)
+// ══════════════════════════════════════════════════════════════════════════════
+
+calculate_advanced_atr() =>
+    if not enable_advanced_atr
+        ta.atr(14)
+    else
+        optimal_period = calculate_optimal_period()
+        safe_optimal_period = na(optimal_period) ? 14.0 : math.max(5.0, math.min(30.0, optimal_period))
+        
+        gk_volatility = garman_klass_estimator()
+        safe_gk_volatility = na(gk_volatility) ? ta.atr(14) : gk_volatility
+        
+        vw_true_range = volume_weighted_true_range()
+        safe_vw_true_range = na(vw_true_range) ? ta.atr(14) : vw_true_range
+        
+        combined_volatility = math.max(safe_gk_volatility, safe_vw_true_range)
+        
+        // Apply NQ session weighting if enabled
+        if i_use_nq_opt and i_session_weights
+            combined_volatility := is_ny_session() ? combined_volatility * 1.2 : combined_volatility * 0.8
+        
+        // Use EMA ONLY for the ATR calculation, not for smoothing the output
+        enhanced_atr = custom_ema(combined_volatility, safe_optimal_period)
+        
+        final_atr = enhanced_atr * math.max(0.1, math.min(3.0, advanced_sensitivity))
+        
+        math.max(final_atr, 0.0001)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CORE VOLATILITY CALCULATIONS (ALL RAW - NO SMOOTHING)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Multi-timeframe ATR with advanced calculations
+atr_fast = enable_advanced_atr ? calculate_advanced_atr() : ta.atr(i_atr_fast)
+atr_med = ta.atr(i_atr_med)
+atr_slow = ta.atr(i_atr_slow)
+
+// Apply gap adjustment if NQ optimization is enabled
+if i_use_nq_opt and i_gap_adjustment
+    tr_adjusted = gap_adjusted_tr(true)
+    atr_fast := ta.rma(tr_adjusted, i_atr_fast)
+
+// Parkinson Estimator (RAW)
+parkinson = garman_klass_estimator() * 0.627  // Parkinson constant
+
+// Yang-Zhang Estimator (RAW)
+yang_zhang_calc() =>
+    overnight = na(open[1]) ? 0 : math.log(open / close[1])
+    overnight_var = math.pow(overnight, 2)
+    
+    oc = math.log(close / open)
+    oc_var = math.pow(oc, 2)
+    
+    cc = math.log(close / close[1])
+    cc_var = math.pow(cc, 2)
+    
+    rs = math.log(high / close) * math.log(high / open) + math.log(low / close) * math.log(low / open)
+    
+    k = 0.34 / (1 + (float(i_atr_fast) + 1) / float(i_atr_fast))
+    yz_var = overnight_var + k * oc_var + (1 - k) * rs
+    
+    math.sqrt(math.max(0, yz_var)) * close
+
+yz_estimator = yang_zhang_calc()
+
+// Volatility of Volatility (RAW)
+vov = ta.stdev(atr_med, 20) / ta.sma(atr_med, 20)
+
+// Microstructure Proxy (RAW)
+kyle_lambda = math.abs(close - close[1]) / math.sqrt(volume)
+
+// Term Structure (RAW)
+term_slope = (atr_slow - atr_fast) / atr_med
+
+// Volatility Acceleration (RAW)
+vol_acceleration = atr_fast - atr_fast[1]
+vol_jerk = vol_acceleration - vol_acceleration[1]
+
+// ══════════════════════════════════════════════════════════════════════════════
+// EXTERNAL DATA INTEGRATION
+// ══════════════════════════════════════════════════════════════════════════════
+
+// VIX Integration
+vix = request.security("CBOE:VIX", timeframe.period, close)
+vxn = request.security("CBOE:VXN", timeframe.period, close)
+spy_vol = request.security("SPY", timeframe.period, ta.atr(i_atr_med))
+
+// Connection Status
+vix_connected = not na(vix)
+vxn_connected = not na(vxn)
+spy_connected = not na(spy_vol)
+
+// Relative Volatility (RAW)
+rel_vol = spy_connected ? atr_med / spy_vol : 1
+
+// ══════════════════════════════════════════════════════════════════════════════
+// NORMALIZATION & Z-SCORES (IMPROVED FROM YOUR ATR SYSTEM)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Z-Score Calculation
+calc_zscore(value, length) =>
+    mean = ta.sma(value, length)
+    stdev = ta.stdev(value, length)
+    na(stdev) or stdev == 0 ? 0 : (value - mean) / stdev
+
+// Normalize all dimensions (RAW VALUES)
+z_atr = calc_zscore(atr_fast, i_regime_lookback)
+z_vov = calc_zscore(vov, i_regime_lookback)
+z_kyle = calc_zscore(kyle_lambda, i_regime_lookback)
+z_park = calc_zscore(parkinson, i_regime_lookback)
+z_term = calc_zscore(term_slope, i_regime_lookback)
+z_accel = calc_zscore(vol_acceleration, i_regime_lookback)
+z_yz = calc_zscore(yz_estimator, i_regime_lookback)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// COMPOSITE VOLATILITY SCORE (RAW - NO SMOOTHING)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Weighted Composite - RAW
+composite = if enable_advanced_atr
+    (z_atr * 0.35 + z_vov * 0.20 + z_park * 0.15 + z_yz * 0.10 + z_kyle * 0.10 + z_term * 0.05 + z_accel * 0.05)
+else
+    (z_atr * 0.30 + z_vov * 0.20 + z_park * 0.15 + z_kyle * 0.15 + z_term * 0.10 + z_accel * 0.10)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// REGIME DETECTION (ENHANCED)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Market Regime Detection
+detect_market_regime() =>
+    trend_strength = math.abs(ta.sma(close, 20) - ta.sma(close, 50)) / atr_fast
+    volatility_regime = atr_fast / ta.sma(atr_fast, 50)
+    
+    regime = trend_strength > 1.0 ? "TRENDING" : volatility_regime > 1.2 ? "VOLATILE" : "RANGING"
+    [regime, trend_strength, volatility_regime]
+
+// Dynamic Percentiles
+percentile = ta.percentrank(composite, i_regime_lookback)
+
+// Regime Classification
+[market_regime, trend_str, vol_regime_val] = detect_market_regime()
+
+regime = composite > 2.0 ? 4 :    // Extreme
+         composite > 1.0 ? 3 :     // High  
+         composite > -0.5 ? 2 :    // Normal
+         composite > -1.5 ? 1 : 0  // Low/Dormant
+
+// Adjust regime based on market context
+if market_regime == "VOLATILE" and regime < 3
+    regime := 3
+else if market_regime == "RANGING" and regime > 2
+    regime := 2
+
+regime_text = regime == 4 ? "EXTREME" : regime == 3 ? "HIGH" : regime == 2 ? "NORMAL" : regime == 1 ? "LOW" : "DORMANT"
+
+// Regime Colors
+regime_color = regime == 4 ? color.new(i_bear_color, 0) : 
+               regime == 3 ? color.new(i_bear_color, 30) : 
+               regime == 2 ? color.new(i_neutral_color, 30) : 
+               regime == 1 ? color.new(i_bull_color, 30) : 
+               color.new(i_bull_color, 0)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SCORE CALCULATION (GLOBAL VARIABLE)
+// ══════════════════════════════════════════════════════════════════════════════
+
+var float score = 0.0
+score := 0.0
+
+// VIX Discount/Premium
+vix_ratio = 1.0
+if vix_connected and atr_med > 0
+    vix_ratio := vix / (atr_med * math.sqrt(252) * 100)
+    score := score + (vix_ratio < 0.8 ? 20 : vix_ratio > 1.2 ? -10 : 5)
+
+// Regime Score
+score := score + (regime <= 1 ? 25 : regime == 2 ? 10 : regime >= 3 ? -20 : 0)
+
+// Term Structure
+score := score + (term_slope < -0.1 ? 20 : term_slope > 0.1 ? -10 : 5)
+
+// Volatility Squeeze  
+[bb_middle, bb_upper, bb_lower] = ta.bb(close, 20, 2)
+bb_width = (bb_upper - bb_lower) / close
+squeeze = bb_width < ta.lowest(bb_width, 100)
+score := score + (squeeze ? 25 : 0)
+
+// Volume Confirmation
+vol_conf_ratio = volume / ta.sma(volume, 20)
+score := score + (vol_conf_ratio < 0.7 ? 10 : vol_conf_ratio > 1.5 ? -5 : 0)
+
+// NQ-specific bonus
+if i_use_nq_opt
+    // RTH session bonus for entries
+    if is_ny_session() and regime <= 1
+        score := score + 10
+    // Globex penalty for extreme volatility
+    if is_globex_session() and regime >= 3
+        score := score - 10
+
+// Clamp score
+score := math.max(0, math.min(100, score))
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PLOTTING & VISUALIZATION
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Main Oscillator
+plot_p1 = plot(composite, "RAW Composite Volatility", color=regime_color, linewidth=3)
+plot_p0 = plot(0, "Zero", color=color.new(color.gray, 70))
+
+// Fill based on direction
+fill(plot_p1, plot_p0, color=composite > 0 ? color.new(i_bear_color, i_bg_transp) : color.new(i_bull_color, i_bg_transp))
+
+// Reference Lines
+hline(2, "Extreme", color=color.new(i_bear_color, 70), linestyle=hline.style_dotted)
+hline(1, "High", color=color.new(i_neutral_color, 70), linestyle=hline.style_dotted)
+hline(-1, "Low", color=color.new(i_bull_color, 70), linestyle=hline.style_dotted)
+
+// Regime Background
+var color regime_bg_color = na
+if regime == 4
+    regime_bg_color := color.new(i_bear_color, i_bg_transp)
+else if regime == 3
+    regime_bg_color := color.new(i_bear_color, i_bg_transp + 3)
+else if regime == 2
+    regime_bg_color := color.new(i_neutral_color, i_bg_transp + 5)
+else if regime == 1
+    regime_bg_color := color.new(i_bull_color, i_bg_transp + 3)
+else
+    regime_bg_color := color.new(i_bull_color, i_bg_transp)
+
+bgcolor(regime_bg_color)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// HEAT MAP NORMALIZATION
+// ══════════════════════════════════════════════════════════════════════════════
+
+heat_norm(val) =>
+    norm = (val + 3) / 6 * 100
+    math.max(0, math.min(100, norm))
+
+// Calculate normalized values for heat map
+norm_atr = heat_norm(z_atr)
+norm_vov = heat_norm(z_vov)
+norm_term = heat_norm(z_term)
+norm_park = heat_norm(z_park)
+norm_yz = heat_norm(z_yz)
+norm_accel = heat_norm(z_accel)
+
+// Create heat visualization
+heat_h0 = -3.0
+heat_h1 = i_show_heatmap ? -3.0 + (norm_atr / 100.0 * 0.5) : -3.0
+heat_h2 = i_show_heatmap ? heat_h1 + (norm_vov / 100.0 * 0.5) : -3.0
+heat_h3 = i_show_heatmap ? heat_h2 + (norm_term / 100.0 * 0.5) : -3.0
+heat_h4 = i_show_heatmap ? heat_h3 + (norm_park / 100.0 * 0.5) : -3.0
+heat_h5 = i_show_heatmap ? heat_h4 + (norm_yz / 100.0 * 0.5) : -3.0
+heat_h6 = i_show_heatmap ? heat_h5 + (norm_accel / 100.0 * 0.5) : -3.0
+
+// Plot heat map
+heat_p0 = plot(heat_h0, "Base", color.new(color.gray, 100))
+heat_p1 = plot(heat_h1, "ATR", color.new(color.gray, 100))
+heat_p2 = plot(heat_h2, "VoV", color.new(color.gray, 100))
+heat_p3 = plot(heat_h3, "Term", color.new(color.gray, 100))
+heat_p4 = plot(heat_h4, "Park", color.new(color.gray, 100))
+heat_p5 = plot(heat_h5, "YZ", color.new(color.gray, 100))
+heat_p6 = plot(heat_h6, "Accel", color.new(color.gray, 100))
+
+// Fill heat map
+fill(heat_p0, heat_p1, color=i_show_heatmap ? color.new(enable_advanced_atr ? color.fuchsia : color.red, 40) : na, title="ATR Heat")
+fill(heat_p1, heat_p2, color=i_show_heatmap ? color.new(color.orange, 40) : na, title="VoV Heat")
+fill(heat_p2, heat_p3, color=i_show_heatmap ? color.new(color.purple, 40) : na, title="Term Heat") 
+fill(heat_p3, heat_p4, color=i_show_heatmap ? color.new(color.blue, 40) : na, title="Park Heat")
+fill(heat_p4, heat_p5, color=i_show_heatmap ? color.new(color.aqua, 40) : na, title="YZ Heat")
+fill(heat_p5, heat_p6, color=i_show_heatmap ? color.new(color.lime, 40) : na, title="Accel Heat")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// STATUS TABLE
+// ══════════════════════════════════════════════════════════════════════════════
+
+if barstate.islast and i_show_table
+    table_position = position.top_right
+    status_table = table.new(table_position, 3, 8)
+    
+    // Styling
+    header_bg = color.rgb(20, 20, 25)
+    cell_bg = color.rgb(30, 30, 35)
+    
+    // Headers
+    table.cell(status_table, 0, 0, "QVS PRO RAW", bgcolor=header_bg, text_color=color.white, text_size=size.small)
+    table.cell(status_table, 1, 0, "STATUS", bgcolor=header_bg, text_color=color.white, text_size=size.small)
+    table.cell(status_table, 2, 0, "VALUE", bgcolor=header_bg, text_color=color.white, text_size=size.small)
+    
+    // ATR Engine Status
+    atr_status = enable_advanced_atr ? "ADV+NQ" : "STANDARD"
+    atr_status_color = enable_advanced_atr ? color.rgb(0, 255, 170) : color.gray
+    table.cell(status_table, 0, 1, "ATR ENGINE", bgcolor=cell_bg, text_color=color.gray)
+    table.cell(status_table, 1, 1, atr_status, bgcolor=cell_bg, text_color=atr_status_color)
+    table.cell(status_table, 2, 1, str.tostring(atr_fast, "#.####"), bgcolor=cell_bg, text_color=color.white)
+    
+    // Session Status
+    table.cell(status_table, 0, 2, "SESSION", bgcolor=cell_bg, text_color=color.gray)
+    table.cell(status_table, 1, 2, is_ny_session() ? "RTH" : "GLOBEX", bgcolor=cell_bg, text_color=is_ny_session() ? color.yellow : color.gray)
+    table.cell(status_table, 2, 2, "NQ OPT: " + (i_use_nq_opt ? "ON" : "OFF"), bgcolor=cell_bg, text_color=i_use_nq_opt ? color.green : color.gray)
+    
+    // VIX Status
+    table.cell(status_table, 0, 3, "VIX/VXN", bgcolor=cell_bg, text_color=color.gray)
+    table.cell(status_table, 1, 3, vix_connected ? "LIVE" : "DEAD", bgcolor=cell_bg, text_color=vix_connected ? i_bull_color : i_bear_color)
+    table.cell(status_table, 2, 3, vix_connected ? str.tostring(vix, "#.##") + "/" + str.tostring(vxn, "#.##") : "N/A", bgcolor=cell_bg, text_color=color.white)
+    
+    // Regime
+    table.cell(status_table, 0, 4, "REGIME", bgcolor=cell_bg, text_color=color.gray)
+    table.cell(status_table, 1, 4, regime_text, bgcolor=cell_bg, text_color=regime_color)
+    table.cell(status_table, 2, 4, str.tostring(percentile, "#") + "%", bgcolor=cell_bg, text_color=color.white)
+    
+    // Entry Score
+    score_text = score >= 70 ? "HIGH" : score >= 40 ? "MED" : "LOW"
+    score_display_color = score >= 70 ? i_bull_color : score >= 40 ? i_neutral_color : i_bear_color
+    table.cell(status_table, 0, 5, "ENTRY", bgcolor=cell_bg, text_color=color.gray)
+    table.cell(status_table, 1, 5, score_text, bgcolor=cell_bg, text_color=score_display_color)
+    table.cell(status_table, 2, 5, str.tostring(score, "#") + "/100", bgcolor=cell_bg, text_color=color.white)
+    
+    // Volatility Trend
+    vol_trend = composite > composite[1] ? "UP" : composite < composite[1] ? "DOWN" : "FLAT"
+    trend_color = composite > composite[1] ? i_bear_color : composite < composite[1] ? i_bull_color : i_neutral_color
+    table.cell(status_table, 0, 6, "TREND", bgcolor=cell_bg, text_color=color.gray)
+    table.cell(status_table, 1, 6, vol_trend, bgcolor=cell_bg, text_color=trend_color, text_size=size.large)
+    table.cell(status_table, 2, 6, str.tostring(composite, "#.##"), bgcolor=cell_bg, text_color=color.white)
+    
+    // Raw vs Smoothed Difference
+    table.cell(status_table, 0, 7, "MODE", bgcolor=cell_bg, text_color=color.gray)
+    table.cell(status_table, 1, 7, "RAW", bgcolor=cell_bg, text_color=color.rgb(255, 170, 0), text_size=size.large)
+    table.cell(status_table, 2, 7, "NO LAG", bgcolor=cell_bg, text_color=color.green)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ALERTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Regime Change Alerts
+regime_changed = regime != regime[1]
+regime_expansion = regime > regime[1] and regime[1] <= 1
+regime_extreme = regime == 4 and regime[1] < 4
+
+alertcondition(regime_expansion, "Volatility Expansion", "QVS Pro RAW: Volatility expanding from low regime")
+alertcondition(regime_extreme, "Extreme Volatility", "QVS Pro RAW: Extreme volatility regime detected")
+alertcondition(score >= 70 and regime <= 1, "High Quality Entry", "QVS Pro RAW: High quality entry setup (Score: {{plot_0}})")
+
+// NQ-specific alerts
+alertcondition(is_ny_session() and regime_expansion, "RTH Volatility Expansion", "QVS Pro RAW: RTH session volatility expansion") 
+alertcondition(squeeze and is_ny_session(), "RTH Volatility Squeeze", "QVS Pro RAW: RTH session squeeze detected")
+
+// Raw volatility spike alert
+raw_spike = composite > 2.5 and composite[1] < 2.0
+alertcondition(raw_spike, "Raw Volatility Spike", "QVS Pro RAW: Immediate volatility spike detected")
