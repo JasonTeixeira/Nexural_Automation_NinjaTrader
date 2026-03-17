@@ -1,0 +1,345 @@
+//@version=6
+indicator("Quant RSI", shorttitle="QRSI", overlay=false, precision=2)
+
+// =================== INPUT PARAMETERS ===================
+// RSI Settings
+var float gamma = input.float(0.7, "Filter Smoothing", minval=0.1, maxval=0.95, step=0.05)
+var int shortLength = input.int(5, "Short-term Length", minval=2, maxval=20)
+var int mediumLength = input.int(14, "Medium-term Length", minval=5, maxval=30)
+var int longLength = input.int(21, "Long-term Length", minval=10, maxval=50)
+
+// ATR Settings
+var int atrPeriod = input.int(14, "ATR Period", minval=1)
+var int atrSmoothPeriod = input.int(50, "ATR Smoothing Period", minval=1)
+
+// Timeframe Settings - Updated to match requested timeframes
+var string tf1 = input.string("5", "Timeframe 1", options=["1", "3", "5"])
+var string tf2 = input.string("10", "Timeframe 2", options=["5", "10", "15"])
+var string tf3 = input.string("15", "Timeframe 3", options=["15", "30"])
+var string tf4 = input.string("30", "Timeframe 4", options=["30", "45", "60"])
+var string tf5 = input.string("60", "Timeframe 5", options=["60", "120", "240"])
+
+// ADX Settings
+var int adxLength = input.int(14, "ADX Length", minval=1, maxval=50)
+
+// Visual Settings
+var color bullColor = input.color(color.new(#00BFB3, 0), "Bullish Color")
+var color bearColor = input.color(color.new(#FF6B8B, 0), "Bearish Color")
+var color neutralColor = input.color(color.new(#F5A300, 0), "Neutral Color")
+
+// =================== GLOBAL COLOR DEFINITIONS ===================
+white_color = #FFFFFF
+red_color = #FF0000
+lime_color = #00FF00
+cyan_color = #00FFFF
+orange_color = #FFA500
+yellow_color = #FFFF00
+gray_color = #808080
+blue_color = #0066CC
+purple_color = #9C27B0
+
+// Professional colors
+steel_blue = #2d3748
+bright_green = #00ff88
+bright_red = #ff4444
+neutral_gray = #666666
+advanced_glow = #00FFAA
+
+// Fill colors
+red_fill = color.new(red_color, 92)
+green_fill = color.new(lime_color, 92)
+blue_fill = color.new(blue_color, 96)
+orange_fill = color.new(orange_color, 96)
+advanced_fill = color.new(advanced_glow, 95)
+
+// Transparent colors
+red_transparent = color.new(red_color, 60)
+green_transparent = color.new(lime_color, 60)
+red_dotted = color.new(red_color, 70)
+green_dotted = color.new(lime_color, 70)
+
+// =================== UTILITY FUNCTIONS ===================
+// Hull Moving Average for minimal lag smoothing
+hull_ma(src, length) =>
+    float wma1 = ta.wma(src, math.floor(length/2))
+    float wma2 = ta.wma(src, length)
+    ta.wma(2 * wma1 - wma2, math.floor(math.sqrt(length)))
+
+// Optimized Laguerre-filtered RSI calculation
+filtered_rsi(src, length, g) =>
+    float L0 = 0.0, float L1 = 0.0, float L2 = 0.0, float L3 = 0.0
+    L0 := (1 - g) * src + g * nz(L0[1], src)
+    L1 := -g * L0 + nz(L0[1], src) + g * nz(L1[1], src)
+    L2 := -g * L1 + nz(L1[1], src) + g * nz(L2[1], src)
+    L3 := -g * L2 + nz(L2[1], src) + g * nz(L3[1], src)
+    
+    float CU = (L0 > L1 ? L0 - L1 : 0) + (L1 > L2 ? L1 - L2 : 0) + (L2 > L3 ? L2 - L3 : 0)
+    float CD = (L0 < L1 ? L1 - L0 : 0) + (L1 < L2 ? L2 - L1 : 0) + (L2 < L3 ? L3 - L2 : 0)
+    
+    100 * (CU + CD != 0 ? CU/(CU+CD) : 0.5)
+
+// ATR-based volatility calculations
+calculate_volatility() =>
+    float atr_val = ta.atr(atrPeriod)
+    float atr_pct = 100 * atr_val / close
+    float atr_norm = atr_pct / ta.sma(atr_pct, atrSmoothPeriod)
+    float vol_factor = math.max(0.8, math.min(1.5, atr_norm))
+    float vol_change = atr_norm / nz(atr_norm[10], atr_norm)
+    string vol_state = vol_change > 1.3 ? "EXPLODING" : vol_change > 1.1 ? "EXPANDING" : vol_change < 0.9 ? "CONTRACTING" : "STABLE"
+    
+    [atr_val, atr_pct, vol_factor, vol_state, vol_change]
+
+// Volume delta analysis
+volume_analysis() =>
+    float vol_delta = volume * (close - open) / math.max(high - low, 0.001)
+    float cvd = ta.cum(vol_delta)
+    bool cvd_rising = ta.ema(cvd, 10) > ta.ema(cvd, 20) 
+    string cvd_trend = cvd_rising ? "RISING" : "FALLING"
+    bool confirms_price = math.sign(vol_delta) == math.sign(close - close[1])
+    
+    [vol_delta, cvd, cvd_trend, confirms_price]
+
+// Enhanced Market condition classifier (from Quant Flow Pro)
+classify_market(rsi_med, rsi_long, vol_state) =>
+    float rsi_med_change = rsi_med - rsi_med[10]
+    bool short_trend = ta.ema(close, 8) > ta.ema(close, 21)
+    bool medium_trend = ta.ema(close, 21) > ta.ema(close, 50)
+    bool long_trend = ta.ema(close, 50) > ta.ema(close, 200)
+    
+    string condition = ""
+    condition := vol_state == "EXPLODING" ? "VOLATILITY EXPANSION" : 
+                 short_trend and medium_trend and long_trend and rsi_med_change > 10 ? "STRONG BULL" :
+                 short_trend and medium_trend and long_trend ? "BULL TREND" :
+                 short_trend and medium_trend and rsi_med_change < 0 ? "BULL PULLBACK" :
+                 not short_trend and not medium_trend and not long_trend and rsi_med_change < -10 ? "STRONG BEAR" :
+                 not short_trend and not medium_trend and not long_trend ? "BEAR TREND" :
+                 not short_trend and not medium_trend and rsi_med_change > 0 ? "BEAR PULLBACK" :
+                 math.abs(rsi_med_change) < 3 and math.abs(rsi_med - 50) < 5 ? "SIDEWAYS" :
+                 (rsi_med > 70 and rsi_med_change < -5) or (rsi_med < 30 and rsi_med_change > 5) ? "EXHAUSTION" :
+                 "TRANSITIONING"
+    
+    condition
+
+// Enhanced Signal strength calculator incorporating Quant Flow methods
+calculate_signal_strength(rsi_val, vol_confirms, hasDivergence, adx_val, tf_alignment) =>
+    float trend_factor = math.abs(rsi_val - 50) / 50  // 0-1 scale
+    float momentum_factor = math.abs(rsi_val - nz(rsi_val[5], rsi_val)) / 10  // 0-1 scale
+    float vol_factor = vol_confirms ? 1.0 : 0.6
+    float div_factor = hasDivergence ? 1.0 : 0.8
+    
+    // Add ADX factor (scaled to 0-1)
+    float adx_factor = math.min(adx_val / 50, 1.0)
+    
+    // Add timeframe alignment factor (0-1 scale)
+    float tf_factor = tf_alignment / 100
+    
+    // Weighted average of all factors
+    float composite = (trend_factor * 0.3) + 
+                     (momentum_factor * 0.2) + 
+                     (vol_factor * 0.15) + 
+                     (div_factor * 0.15) + 
+                     (adx_factor * 0.1) + 
+                     (tf_factor * 0.1)
+    
+    int strength = math.round(composite * 100)
+    math.min(strength, 100)
+
+// Enhanced Divergence detection using multiple timeframes
+detect_divergence(rsi_series, price_series) =>
+    int lookback = 5
+    
+    // Find significant RSI pivots
+    float rsi_min = ta.lowest(rsi_series, lookback)
+    float rsi_max = ta.highest(rsi_series, lookback)
+    bool rsi_pivot_low = rsi_series == rsi_min and rsi_series < 40 and rsi_series[1] > rsi_series and rsi_series[2] > rsi_series
+    bool rsi_pivot_high = rsi_series == rsi_max and rsi_series > 60 and rsi_series[1] < rsi_series and rsi_series[2] < rsi_series
+    
+    // Find significant price pivots
+    float price_min = ta.lowest(price_series, lookback)
+    float price_max = ta.highest(price_series, lookback)
+    bool price_pivot_low = price_series == price_min and price_series[1] > price_series and price_series[2] > price_series
+    bool price_pivot_high = price_series == price_max and price_series[1] < price_series and price_series[2] < price_series
+    
+    // Look for historical pivots
+    bool hist_rsi_pivot_low = rsi_series[lookback] == ta.lowest(rsi_series, lookback*2)[lookback] and rsi_series[lookback] < 40
+    bool hist_rsi_pivot_high = rsi_series[lookback] == ta.highest(rsi_series, lookback*2)[lookback] and rsi_series[lookback] > 60
+    bool hist_price_pivot_low = price_series[lookback] == ta.lowest(price_series, lookback*2)[lookback]
+    bool hist_price_pivot_high = price_series[lookback] == ta.highest(price_series, lookback*2)[lookback]
+    
+    // Check for regular divergences
+    bool bull_div = rsi_pivot_low and hist_rsi_pivot_low and price_pivot_low and hist_price_pivot_low and rsi_series > rsi_series[lookback] and price_series < price_series[lookback]
+    
+    bool bear_div = rsi_pivot_high and hist_rsi_pivot_high and price_pivot_high and hist_price_pivot_high and rsi_series < rsi_series[lookback] and price_series > price_series[lookback]
+    
+    // Check for hidden divergences
+    bool hidden_bull_div = rsi_pivot_low and hist_rsi_pivot_low and price_pivot_low and hist_price_pivot_low and rsi_series < rsi_series[lookback] and price_series > price_series[lookback]
+    
+    bool hidden_bear_div = rsi_pivot_high and hist_rsi_pivot_high and price_pivot_high and hist_price_pivot_high and rsi_series > rsi_series[lookback] and price_series < price_series[lookback]
+    
+    // Calculate divergence strength (0-100)
+    float bull_str = bull_div ? math.abs(price_series[lookback] - price_series) / price_series[lookback] * 100 * 5 : 0
+    float bear_str = bear_div ? math.abs(price_series[lookback] - price_series) / price_series[lookback] * 100 * 5 : 0
+    int div_strength = math.round(math.max(bull_str, bear_str))
+    div_strength := math.min(div_strength, 100)
+    
+    [bull_div, bear_div, hidden_bull_div, hidden_bear_div, div_strength]
+
+// Calculate ADX with trend direction 
+calculate_adx(length) =>
+    float plus_dm = ta.change(high)
+    float minus_dm = -ta.change(low)
+    float plus_dm1 = plus_dm > minus_dm and plus_dm > 0 ? plus_dm : 0
+    float minus_dm1 = minus_dm > plus_dm and minus_dm > 0 ? minus_dm : 0
+    
+    float tr = math.max(math.max(high - low, math.abs(high - close[1])), math.abs(low - close[1]))
+    float plus_di = 100 * ta.ema(plus_dm1, length) / ta.ema(tr, length)
+    float minus_di = 100 * ta.ema(minus_dm1, length) / ta.ema(tr, length)
+    float adx_val = 100 * ta.ema(math.abs(plus_di - minus_di) / (plus_di + minus_di), length)
+    
+    trend = plus_di > minus_di ? "BULL" : "BEAR"
+    strength = adx_val < 20 ? "WEAK" : adx_val < 40 ? "MODERATE" : adx_val < 60 ? "STRONG" : "EXTREME"
+    
+    [adx_val, trend, strength]
+
+// =================== MAIN CALCULATIONS ===================
+// Calculate base RSI values
+float rsi_short = filtered_rsi(close, shortLength, gamma)
+float rsi_medium = filtered_rsi(close, mediumLength, gamma)
+float rsi_long = filtered_rsi(close, longLength, gamma)
+
+// Get multi-timeframe RSI values with real-time updates
+get_tf_rsi(tf) =>
+    request.security(syminfo.tickerid, tf, filtered_rsi(close, mediumLength, gamma), lookahead=barmerge.lookahead_off)
+
+float rsi_tf1 = get_tf_rsi(tf1)
+float rsi_tf2 = get_tf_rsi(tf2)
+float rsi_tf3 = get_tf_rsi(tf3)
+float rsi_tf4 = get_tf_rsi(tf4)
+float rsi_tf5 = get_tf_rsi(tf5)
+
+// Calculate ADX values
+[adx_value, adx_trend, adx_strength] = calculate_adx(adxLength)
+
+// Calculate ATR-based volatility metrics
+[atr_value, atr_percent, vol_factor, vol_state, vol_change] = calculate_volatility()
+float ob_threshold = 70 + (vol_factor - 1) * 15
+float os_threshold = 30 - (vol_factor - 1) * 15
+
+// Process volume data
+[vol_delta, cvd, cvd_trend, vol_confirms_price] = volume_analysis()
+
+// Calculate trend strength (zero-lag implementation)
+trend_strength_calc() =>
+    float alpha = 0.07
+    float smooth = (close + 2*close[1] + 2*close[2] + close[3])/6
+    float pred = (1-alpha)*smooth + alpha*nz(smooth[1], smooth)
+    float dir_change = math.abs(pred - nz(pred[5], pred)) / math.max(0.001, ta.atr(5))
+    math.min(100, math.round(dir_change * 50))
+
+int trend_strength = trend_strength_calc()
+
+// Determine market condition
+string market_condition = classify_market(rsi_medium, rsi_long, vol_state)
+
+// Check for divergences with enhanced detection
+[bull_div_short, bear_div_short, hidden_bull_short, hidden_bear_short, div_strength_short] = detect_divergence(rsi_short, close)
+[bull_div_medium, bear_div_medium, hidden_bull_medium, hidden_bear_medium, div_strength_medium] = detect_divergence(rsi_medium, close)
+[bull_div_long, bear_div_long, hidden_bull_long, hidden_bear_long, div_strength_long] = detect_divergence(rsi_long, close)
+
+// Calculate timeframe alignment score
+calculate_tf_alignment(main_rsi) =>
+    bool isUp = main_rsi > main_rsi[1]
+    int aligned_count = 0
+    aligned_count := aligned_count + (isUp == (rsi_tf1 > rsi_tf1[1]) ? 1 : 0)
+    aligned_count := aligned_count + (isUp == (rsi_tf2 > rsi_tf2[1]) ? 1 : 0)
+    aligned_count := aligned_count + (isUp == (rsi_tf3 > rsi_tf3[1]) ? 1 : 0)
+    aligned_count := aligned_count + (isUp == (rsi_tf4 > rsi_tf4[1]) ? 1 : 0)
+    aligned_count := aligned_count + (isUp == (rsi_tf5 > rsi_tf5[1]) ? 1 : 0)
+    
+    math.round((aligned_count / 5) * 100)
+
+int tf_alignment_short = calculate_tf_alignment(rsi_short)
+int tf_alignment_medium = calculate_tf_alignment(rsi_medium)
+int tf_alignment_long = calculate_tf_alignment(rsi_long)
+
+// Calculate enhanced signal strengths
+int signal_short = calculate_signal_strength(rsi_short, vol_confirms_price, bull_div_short or bear_div_short, adx_value, tf_alignment_short)
+int signal_medium = calculate_signal_strength(rsi_medium, vol_confirms_price, bull_div_medium or bear_div_medium, adx_value, tf_alignment_medium)
+int signal_long = calculate_signal_strength(rsi_long, vol_confirms_price, bull_div_long or bear_div_long, adx_value, tf_alignment_long)
+
+// Determine primary signal
+determine_signal() =>
+    string signal = "NEUTRAL"
+    string timeframe = "M" + str.tostring(mediumLength)
+    
+    if rsi_medium < os_threshold and vol_confirms_price and bull_div_medium
+        signal := "STRONG BUY"
+    else if rsi_medium < os_threshold and vol_confirms_price
+        signal := "BUY"
+    else if rsi_medium < os_threshold
+        signal := "POTENTIAL BUY"
+    else if rsi_medium > ob_threshold and vol_confirms_price and bear_div_medium
+        signal := "STRONG SELL"
+    else if rsi_medium > ob_threshold and vol_confirms_price
+        signal := "SELL"
+    else if rsi_medium > ob_threshold
+        signal := "POTENTIAL SELL"
+    
+    [signal, timeframe]
+
+[primary_signal, signal_timeframe] = determine_signal()
+
+// Calculate confluence score
+int confluence_score = math.round((signal_short + signal_medium + signal_long) / 3)
+
+// Generate dynamic line color
+get_line_color(rsi_value, prev_rsi) =>
+    color result = rsi_value > prev_rsi ? bullColor : rsi_value < prev_rsi ? bearColor : neutralColor
+    result
+
+color line_color = get_line_color(rsi_medium, rsi_medium[1])
+
+// =================== PLOTTING ELEMENTS ===================
+// CRITICAL FIX #1: Force scale to exactly 0-100 with visible plots
+plot(0, "Scale Bottom", color=color.new(color.gray, 100), linewidth=1, display=display.all)
+plot(100, "Scale Top", color=color.new(color.gray, 100), linewidth=1, display=display.all)
+
+// CRITICAL FIX #2: Add a dummy series that spans 0-100 to force scaling
+dummy_scale = close > 0 ? 50 : 50  // Always 50, but needs to reference close to be a series
+plot(series=dummy_scale, color=color.new(color.white, 100), display=display.none, title="Scale Anchor")
+
+// Plot fixed horizontal lines
+hline(0, "Bottom", color=color.new(color.gray, 85), linestyle=hline.style_solid)
+hline(100, "Top", color=color.new(color.gray, 85), linestyle=hline.style_solid)
+hline(70, "Upper Band", color=color.new(color.gray, 50))
+hline(30, "Lower Band", color=color.new(color.gray, 50))
+hline(50, "Middle Band", color=color.new(color.gray, 80), linestyle=hline.style_dotted)
+
+// Background fills using hlines
+band1 = hline(70, "UB", color=color.new(color.gray, 100))
+band0 = hline(30, "LB", color=color.new(color.gray, 100))
+band2 = hline(50, "MB", color=color.new(color.gray, 100))
+fill(band1, band2, color=color.new(color.red, 95), title="Upper Background")
+fill(band0, band2, color=color.new(color.green, 95), title="Lower Background")
+
+// Main RSI plot - ensure it's within 0-100
+rsi_clamped = math.max(0, math.min(100, rsi_medium))
+plot(rsi_clamped, "Quant RSI", color=line_color, linewidth=2)
+
+// Plot dynamic threshold bands - clamp to ensure they stay within bounds
+ob_threshold_clamped = math.max(50, math.min(100, ob_threshold))
+os_threshold_clamped = math.max(0, math.min(50, os_threshold))
+plot(ob_threshold_clamped, "Dynamic Upper", color=color.new(color.purple, 70), style=plot.style_circles, linewidth=1)
+plot(os_threshold_clamped, "Dynamic Lower", color=color.new(color.purple, 70), style=plot.style_circles, linewidth=1)
+
+// Plot divergences using plot instead of plotshape to avoid scaling issues
+plot(bull_div_medium ? 5 : na, "Bull Div", color=color.new(color.green, 0), style=plot.style_circles, linewidth=3)
+plot(bear_div_medium ? 95 : na, "Bear Div", color=color.new(color.red, 0), style=plot.style_circles, linewidth=3)
+
+// =================== ALERTING CONDITIONS ===================
+alertcondition(bull_div_medium, "Bullish Divergence", "Medium-term RSI shows bullish divergence")
+alertcondition(bear_div_medium, "Bearish Divergence", "Medium-term RSI shows bearish divergence")
+alertcondition(rsi_medium < os_threshold and vol_confirms_price, "Buy Signal", "RSI below threshold with volume confirmation")
+alertcondition(rsi_medium > ob_threshold and vol_confirms_price, "Sell Signal", "RSI above threshold with volume confirmation")
+alertcondition(tf_alignment_medium >= 80 and rsi_medium < 40, "MTF Bullish Alignment", "Multiple timeframes show bullish alignment")
+alertcondition(tf_alignment_medium >= 80 and rsi_medium > 60, "MTF Bearish Alignment", "Multiple timeframes show bearish alignment")
