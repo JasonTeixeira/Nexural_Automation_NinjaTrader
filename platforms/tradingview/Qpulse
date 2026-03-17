@@ -1,0 +1,973 @@
+//@version=6
+indicator("QPulse", shorttitle="QPulse", overlay=false, max_lines_count=500, max_labels_count=100, max_boxes_count=500, dynamic_requests=true)
+
+// ============================================================================
+// QPULSE PRO ENHANCED - NO DASHBOARD EDITION
+// Volume-Normalized + CPU-Optimized + All Signal Generation
+// Dashboard Removed - All Signals, Plots, and Alerts Remain Active
+// ============================================================================
+
+// ============================================================================
+// PERFORMANCE OPTIMIZATION VARIABLES
+// ============================================================================
+
+// Cache for expensive calculations
+var float cached_advanced_atr = na
+var int last_atr_calc_bar = 0
+var float cached_advanced_atr_avg = na
+
+// Volume normalization cache
+var float volume_baseline = na
+var int last_volume_baseline_bar = 0
+
+// ============================================================================
+// INPUT SETTINGS - ORGANIZED BY CATEGORY
+// ============================================================================
+
+// HEATMAP SETTINGS
+heatmap_group = "🌡️ Heatmap Visualization"
+show_heatmap = input.bool(true, "Show Heatmap", group=heatmap_group)
+heatmap_height = input.int(10, "Heatmap Height", minval=5, maxval=30, group=heatmap_group)
+heatmap_lookback = input.int(100, "Heatmap History Length", minval=50, maxval=200, group=heatmap_group)
+heatmap_smoothing = input.int(3, "Heatmap Smoothing", minval=1, maxval=10, group=heatmap_group)
+
+// ENHANCED DETECTION SETTINGS
+enhanced_group = "🚀 Enhanced Detection Systems"
+enable_volume_delta = input.bool(true, "Volume Delta Analysis", group=enhanced_group)
+enable_volatility_signatures = input.bool(true, "Volatility Signatures", group=enhanced_group)
+enable_vwap_bands = input.bool(false, "VWAP Deviation Bands", group=enhanced_group)
+enable_rvol_detection = input.bool(true, "Relative Volume Spikes", group=enhanced_group)
+enable_divergence_engine = input.bool(true, "Divergence Detection", group=enhanced_group)
+
+// QUANT-GRADE SETTINGS
+quant_group = "⚡ Quant-Grade Engine"
+enable_intermarket_divergence = input.bool(true, "Intermarket Volatility Divergence", group=quant_group)
+enable_cvd_proxy = input.bool(true, "Cumulative Delta (CVD) Proxy", group=quant_group)
+enable_direct_vov = input.bool(true, "Direct Volatility of Volatility", group=quant_group)
+futures_mode = input.string("Auto-Detect", "Market Type", options=["Auto-Detect", "Futures", "Equities", "Crypto"], group=quant_group)
+
+// VOLUME NORMALIZATION SETTINGS
+volume_norm_group = "📊 Volume Normalization"
+enable_volume_norm = input.bool(true, "Enable Volume Normalization", group=volume_norm_group)
+volume_norm_power = input.float(0.3, "Volume Scaling Power", minval=0.1, maxval=0.5, step=0.05, group=volume_norm_group)
+enable_stat_significance = input.bool(true, "Enable Statistical Significance Filter", group=volume_norm_group)
+low_vol_threshold = input.int(20, "Low Volume Percentile", minval=10, maxval=40, group=volume_norm_group)
+med_vol_threshold = input.int(50, "Medium Volume Percentile", minval=40, maxval=70, group=volume_norm_group)
+
+// ADVANCED ATR SETTINGS
+advanced_group = "⚛️ Advanced ATR Engine"
+enable_advanced_atr = input.bool(true, "Enable Advanced ATR", group=advanced_group)
+advanced_sensitivity = input.float(1.0, "Advanced Sensitivity", minval=0.5, maxval=2.0, step=0.1, group=advanced_group)
+adaptive_strength = input.float(1.0, "Adaptive Strength", minval=0.5, maxval=2.0, step=0.1, group=advanced_group)
+volume_integration = input.float(1.0, "Volume Integration", minval=0.1, maxval=3.0, step=0.1, group=advanced_group)
+
+// HYBRID CALCULATION SETTINGS
+hybrid_group = "🚀 Hybrid Calculation Settings"
+enable_hybrid = input.bool(true, "Enable Hybrid VWRSI+ATR", group=hybrid_group)
+vw_sensitivity = input.float(1.0, "Volume Weight Sensitivity", minval=0.1, maxval=3.0, step=0.1, group=hybrid_group)
+atr_sensitivity = input.float(1.0, "ATR Adaptation Sensitivity", minval=0.1, maxval=3.0, step=0.1, group=hybrid_group)
+hybrid_mode = input.string("Auto", "Hybrid Mode", options=["Auto", "Volume-Favored", "ATR-Favored", "Balanced"], group=hybrid_group)
+
+// CORE SETTINGS
+main_group = "🎯 Core Settings"
+src = input.source(close, "Source", group=main_group)
+length = input.int(6, "RSI Length", minval=1, maxval=100, group=main_group)
+overbought = input.float(70.0, "Overbought Level", minval=50.0, maxval=90.0, step=5.0, group=main_group)
+oversold = input.float(30.0, "Oversold Level", minval=10.0, maxval=50.0, step=5.0, group=main_group)
+
+// VISUAL SETTINGS
+visual_group = "🎨 Visual Settings"
+show_zones = input.bool(true, "Show Dynamic Zones", group=visual_group)
+visual_mode = input.string("Zero-Centered", "Visual Display Mode", options=["Zero-Centered", "Traditional"], group=visual_group)
+show_divergences = input.bool(true, "Show Divergence Signals", group=visual_group)
+show_tech_levels = input.bool(true, "Show Technical Levels", group=visual_group)
+
+// ALERT SETTINGS
+alert_group = "🚨 Alert Settings"
+enable_alerts = input.bool(true, "Enable Alerts", group=alert_group)
+
+// ============================================================================
+// COLOR DEFINITIONS
+// ============================================================================
+
+white_color = color.rgb(255, 255, 255)
+red_color = color.rgb(255, 0, 0)
+lime_color = color.rgb(0, 255, 0)
+cyan_color = color.rgb(0, 255, 255)
+orange_color = color.rgb(255, 165, 0)
+yellow_color = color.rgb(255, 255, 0)
+gray_color = color.rgb(128, 128, 128)
+blue_color = color.rgb(0, 102, 204)
+purple_color = color.rgb(148, 0, 211)
+pink_color = color.rgb(255, 105, 180)
+
+steel_blue = color.rgb(45, 55, 72)
+bright_green = color.rgb(0, 255, 136)
+bright_red = color.rgb(255, 68, 68)
+neutral_gray = color.rgb(102, 102, 102)
+advanced_glow = color.rgb(0, 255, 170)
+
+red_fill = color.new(red_color, 92)
+green_fill = color.new(lime_color, 92)
+blue_fill = color.new(blue_color, 96)
+orange_fill = color.new(orange_color, 96)
+advanced_fill = color.new(advanced_glow, 95)
+purple_fill = color.new(purple_color, 94)
+
+red_transparent = color.new(red_color, 60)
+green_transparent = color.new(lime_color, 60)
+red_dotted = color.new(red_color, 70)
+green_dotted = color.new(lime_color, 70)
+
+// ============================================================================
+// GLOBAL VARIABLES
+// ============================================================================
+
+// Enhanced detection values
+var float global_delta = 0.0
+var float global_rvol = 1.0
+var float global_cum_delta = 0.0
+var string global_vol_pattern = "NORMAL"
+var string global_vol_signature = "NORMAL"
+var bool global_breakout_imminent = false
+var float global_vwap_value = 0.0
+var float global_vwap_upper = 0.0
+var float global_vwap_lower = 0.0
+var bool global_near_band = false
+
+// Divergence variables
+var bool bullish_div = false
+var bool bearish_div = false
+var float div_strength = 0.0
+
+// Alert variables
+var bool delta_divergence_alert = false
+var bool rvol_spike_alert = false
+
+// Quant-grade variables
+var bool global_intermarket_divergence = false
+var float global_volatility_divergence_score = 0.0
+var bool global_cvd_divergence = false
+var float global_cvd_momentum = 0.0
+var float global_vov_zscore = 0.0
+var bool global_vov_unstable = false
+var string global_market_stress = "NORMAL"
+
+// Volume normalization variables
+var float global_volume_participation = 1.0
+var float global_signal_threshold = 60.0
+
+// Heatmap arrays
+var heatmap_boxes = array.new<box>()
+
+// VoV array
+var vov_array = array.new_float()
+
+// ============================================================================
+// UTILITY FUNCTIONS
+// ============================================================================
+
+// Auto-detect market type
+detect_market_type() =>
+    ticker = syminfo.ticker
+    if futures_mode != "Auto-Detect"
+        futures_mode
+    else if str.contains(ticker, "ES") or str.contains(ticker, "NQ") or str.contains(ticker, "RTY") or 
+       str.contains(ticker, "CL") or str.contains(ticker, "GC") or str.contains(ticker, "6") or str.contains(ticker, "ZB")
+        "Futures"
+    else if str.contains(ticker, "BTC") or str.contains(ticker, "ETH") or str.contains(ticker, "CRYPTO")
+        "Crypto"
+    else
+        "Equities"
+
+// Safe string conversion
+safe_str(value, format, fallback) =>
+    if na(value)
+        fallback
+    else
+        str.tostring(value, format)
+
+// Safe number with fallback
+safe_num(value, fallback) =>
+    if na(value)
+        fallback
+    else
+        value
+
+// ============================================================================
+// INTERMARKET DATA COLLECTION
+// ============================================================================
+
+// Consolidated intermarket data request
+type IntermarketData
+    float atr1
+    float atr2 
+    float atr3
+    float vix
+
+get_intermarket_data() =>
+    if not enable_intermarket_divergence
+        IntermarketData.new(0.0, 0.0, 0.0, 15.0)
+    else
+        market_type = detect_market_type()
+        
+        if market_type == "Futures"
+            if str.contains(syminfo.ticker, "NQ")
+                es_atr = request.security("ES1!", timeframe.period, ta.atr(14))
+                rty_atr = request.security("RTY1!", timeframe.period, ta.atr(14))
+                vix_val = request.security("VIX", timeframe.period, close)
+                IntermarketData.new(es_atr, rty_atr, 0.0, vix_val)
+            else if str.contains(syminfo.ticker, "ES")
+                nq_atr = request.security("NQ1!", timeframe.period, ta.atr(14))
+                rty_atr = request.security("RTY1!", timeframe.period, ta.atr(14))
+                vix_val = request.security("VIX", timeframe.period, close)
+                IntermarketData.new(nq_atr, rty_atr, 0.0, vix_val)
+            else
+                // Default futures
+                IntermarketData.new(ta.atr(14), ta.atr(14), ta.atr(14), 15.0)
+        else
+            // Default for equities/crypto
+            IntermarketData.new(ta.atr(14), ta.atr(14), ta.atr(14), 15.0)
+
+// ============================================================================
+// VOLUME NORMALIZATION ENGINE
+// ============================================================================
+
+calculate_volume_baseline() =>
+    // Check if we need to update
+    needs_update = bar_index - last_volume_baseline_bar > 100 or ta.change(time("D")) != 0
+    baseline = volume_baseline
+    
+    if needs_update
+        baseline := ta.percentile_nearest_rank(volume, 100, 50)
+    
+    [baseline, needs_update]
+
+calculate_volume_normalization() =>
+    if not enable_volume_norm
+        [1.0, 60.0]
+    else
+        // Get current volume baseline
+        [baseline, needs_update] = calculate_volume_baseline()
+        
+        // Calculate volume ratio
+        safe_baseline = na(baseline) or baseline <= 0 ? ta.sma(volume, 100) : baseline
+        vol_ratio = volume / math.max(safe_baseline, 1.0)
+        vol_ratio_capped = math.min(vol_ratio, 2.0)  // Cap at 2x to prevent over-amplification
+        
+        // Calculate participation factor with configurable power
+        participation = math.pow(vol_ratio_capped, volume_norm_power)
+        
+        // Statistical significance thresholds
+        threshold = 60.0
+        if enable_stat_significance
+            vol_percentile = ta.percentrank(volume, 100)
+            threshold := vol_percentile < low_vol_threshold ? 150.0 : vol_percentile < med_vol_threshold ? 100.0 : 60.0
+        
+        [participation, threshold]
+
+// ============================================================================
+// CACHED ADVANCED ATR ENGINE
+// ============================================================================
+
+// Custom EMA function
+custom_ema(src, len) =>
+    safe_len = na(len) or len <= 0 ? 14.0 : len
+    safe_len := math.max(2.0, math.min(50.0, safe_len))
+    safe_src = na(src) ? close : src
+    alpha = 2.0 / (safe_len + 1.0)
+    
+    var float ema_val = na
+    if na(ema_val) or bar_index < 10
+        ema_val := safe_src
+    else
+        ema_val := alpha * safe_src + (1.0 - alpha) * ema_val
+    
+    na(ema_val) ? safe_src : ema_val
+
+// Advanced ATR calculation with caching
+calculate_advanced_atr_cached() =>
+    // Check if we need to recalculate
+    needs_update = bar_index != last_atr_calc_bar
+    current_atr = cached_advanced_atr
+    current_avg = cached_advanced_atr_avg
+    
+    if needs_update
+        if not enable_advanced_atr
+            current_atr := ta.atr(14)
+            current_avg := ta.sma(ta.atr(14), 50)
+        else
+            // Layer 1: Adaptive Period
+            returns = ta.change(close) / math.max(close[1], 0.0001)
+            abs_returns = math.abs(returns)
+            returns_std = ta.stdev(returns, 20)
+            mean_abs_returns = ta.sma(abs_returns, 20)
+            safe_returns_std = na(returns_std) or returns_std <= 0 ? 0.02 : returns_std
+            safe_mean_abs_returns = na(mean_abs_returns) or mean_abs_returns <= 0 ? 0.01 : mean_abs_returns
+            market_efficiency = safe_returns_std / safe_mean_abs_returns
+            base_period = 14.0
+            efficiency_factor = math.max(0.5, math.min(2.0, market_efficiency))
+            optimal_period = math.round(base_period * (0.5 + efficiency_factor * adaptive_strength))
+            final_period = math.max(5.0, math.min(30.0, optimal_period))
+            safe_optimal_period = float(na(final_period) ? 14.0 : final_period)
+            
+            // Layer 2: Garman-Klass
+            safe_high = math.max(high, close)
+            safe_low = math.min(low, close)
+            safe_open = na(open) ? close : open
+            log_hl = math.log(math.max(safe_high / safe_low, 1.0001))
+            log_co = math.log(math.max(close / safe_open, 1.0001))
+            gk_vol = 0.5 * log_hl * log_hl - (2 * math.log(2) - 1) * log_co * log_co
+            gk_atr = math.sqrt(math.max(0, gk_vol)) * close
+            traditional_range = safe_high - safe_low
+            gk_result = na(gk_atr) or gk_atr <= 0 ? traditional_range : math.max(gk_atr, traditional_range)
+            
+            // Layer 3: Volume-Weighted
+            tr1 = high - low
+            tr2 = math.abs(high - close[1])
+            tr3 = math.abs(low - close[1])
+            true_range = math.max(tr1, math.max(tr2, tr3))
+            volume_sma = ta.sma(volume, 20)
+            safe_volume_sma = na(volume_sma) or volume_sma <= 0 ? volume : volume_sma
+            volume_factor = volume / safe_volume_sma
+            safe_volume_integration = math.max(0.1, math.min(3.0, volume_integration))
+            adjusted_volume_factor = math.pow(math.max(0.1, volume_factor), safe_volume_integration)
+            vw_true_range = true_range * math.max(0.1, math.min(5.0, adjusted_volume_factor))
+            
+            // Combine layers
+            combined_volatility = math.max(gk_result, vw_true_range)
+            enhanced_atr = custom_ema(combined_volatility, safe_optimal_period)
+            
+            // Final result
+            current_atr := enhanced_atr * math.max(0.1, math.min(3.0, advanced_sensitivity))
+            current_avg := custom_ema(current_atr, 50.0)
+    
+    [current_atr, current_avg, needs_update]
+
+// ============================================================================
+// DETECTION SYSTEMS
+// ============================================================================
+
+// Volume Delta
+calculate_volume_delta() =>
+    if not enable_volume_delta
+        [0.0, 0.0, false]
+    else
+        hl_range = high - low
+        safe_range = math.max(hl_range, syminfo.mintick)
+        close_position = (close - low) / safe_range
+        delta = volume * (2 * close_position - 1)
+        
+        var float cumulative_delta = 0.0
+        if ta.change(time("D")) != 0
+            cumulative_delta := delta
+        else
+            cumulative_delta += delta
+        
+        lookback = 20
+        price_trend = close > ta.highest(close[1], lookback)[1]
+        delta_trend = cumulative_delta > ta.highest(cumulative_delta[1], lookback)[1]
+        divergence = price_trend != delta_trend
+        
+        [delta, cumulative_delta, divergence]
+
+// Volatility Signatures
+detect_volatility_signature() =>
+    if not enable_volatility_signatures
+        ["NONE", 0.0, false]
+    else
+        atr_5 = ta.atr(5)
+        atr_20 = ta.atr(20)
+        compression_ratio = atr_5 / atr_20
+        is_compressing = compression_ratio < 0.7
+        was_compressed = ta.lowest(compression_ratio, 10) < 0.7
+        current_expansion = compression_ratio > 1.2
+        
+        high_slope = (ta.highest(high, 20) - ta.highest(high, 20)[20]) / 20
+        low_slope = (ta.lowest(low, 20) - ta.lowest(low, 20)[20]) / 20
+        is_coiling = high_slope < 0 and low_slope > 0
+        
+        signature = is_compressing ? "COMPRESSION" : current_expansion and was_compressed ? "BREAKOUT" : is_coiling ? "COILING" : "NORMAL"
+        confidence = is_compressing ? compression_ratio : current_expansion ? compression_ratio : 1.0
+        breakout_imminent = was_compressed and compression_ratio > 0.65 and compression_ratio < 0.85
+        
+        [signature, confidence, breakout_imminent]
+
+// VWAP Bands
+calculate_vwap_bands() =>
+    if not enable_vwap_bands
+        [0.0, 0.0, 0.0, false]
+    else
+        vwap_val = ta.vwap(hlc3)
+        squared_diff = math.pow(close - vwap_val, 2)
+        variance = ta.sma(squared_diff * volume, 20) / ta.sma(volume, 20)
+        stdev = math.sqrt(math.max(variance, 0))
+        atr_mult = ta.atr(14) / ta.sma(ta.atr(14), 50)
+        band_mult = 2.0 * atr_mult
+        upper_band = vwap_val + (band_mult * stdev)
+        lower_band = vwap_val - (band_mult * stdev)
+        near_upper = high > upper_band * 0.98
+        near_lower = low < lower_band * 1.02
+        near_band = near_upper or near_lower
+        [vwap_val, upper_band, lower_band, near_band]
+
+// RVOL Detection
+detect_volume_anomaly() =>
+    if not enable_rvol_detection
+        [1.0, false, "NORMAL"]
+    else
+        var vol_array = array.new_float(20, 0.0)
+        if ta.change(time("D")) != 0
+            array.shift(vol_array)
+            array.push(vol_array, volume)
+        
+        avg_volume_this_time = array.avg(vol_array)
+        safe_avg = math.max(avg_volume_this_time, ta.sma(volume, 20))
+        rvol = volume / safe_avg
+        
+        price_range = high - low
+        price_move = math.abs(close - open)
+        price_confirms = price_move > price_range * 0.6
+        
+        is_spike = rvol > 2.5 and price_confirms
+        is_extreme = rvol > 4.0 and price_confirms
+        
+        vol_pattern = is_extreme ? "EXTREME" :
+                     is_spike ? "SPIKE" :
+                     rvol > 1.5 ? "ELEVATED" :
+                     rvol < 0.5 ? "DRY" : "NORMAL"
+        
+        [rvol, is_spike, vol_pattern]
+
+// Divergence Engine
+detect_divergence(rsi_value) =>
+    if not enable_divergence_engine
+        [false, false, 0.0]
+    else
+        pivot_lookback = 5
+        
+        price_pivot_high = ta.pivothigh(high, pivot_lookback, pivot_lookback)
+        price_pivot_low = ta.pivotlow(low, pivot_lookback, pivot_lookback)
+        rsi_pivot_high = ta.pivothigh(rsi_value, pivot_lookback, pivot_lookback)
+        rsi_pivot_low = ta.pivotlow(rsi_value, pivot_lookback, pivot_lookback)
+        
+        var float last_price_high = na
+        var float last_rsi_high = na
+        var int last_high_bar = 0
+        var float last_price_low = na
+        var float last_rsi_low = na
+        var int last_low_bar = 0
+        
+        if not na(price_pivot_high)
+            last_price_high := high[pivot_lookback]
+            last_rsi_high := rsi_value[pivot_lookback]
+            last_high_bar := bar_index - pivot_lookback
+        
+        if not na(price_pivot_low)
+            last_price_low := low[pivot_lookback]
+            last_rsi_low := rsi_value[pivot_lookback]
+            last_low_bar := bar_index - pivot_lookback
+        
+        bearish_div = false
+        bullish_div = false
+        div_strength = 0.0
+        
+        if not na(price_pivot_high) and not na(last_price_high) and bar_index - last_high_bar > pivot_lookback
+            if high[pivot_lookback] > last_price_high and rsi_value[pivot_lookback] < last_rsi_high
+                bearish_div := true
+                div_strength := math.abs(rsi_value[pivot_lookback] - last_rsi_high)
+        
+        if not na(price_pivot_low) and not na(last_price_low) and bar_index - last_low_bar > pivot_lookback
+            if low[pivot_lookback] < last_price_low and rsi_value[pivot_lookback] > last_rsi_low
+                bullish_div := true
+                div_strength := math.abs(rsi_value[pivot_lookback] - last_rsi_low)
+        
+        [bullish_div, bearish_div, div_strength]
+
+// ============================================================================
+// QUANT-GRADE ENGINES
+// ============================================================================
+
+// Intermarket Divergence
+calculate_intermarket_divergence(atr1, atr2, atr3, vix) =>
+    if not enable_intermarket_divergence
+        [false, 0.0, "NORMAL"]
+    else
+        current_atr = cached_advanced_atr
+        
+        // Use pre-fetched intermarket data
+        current_zscore = (current_atr - ta.sma(current_atr, 20)) / ta.stdev(current_atr, 20)
+        zscore1 = (atr1 - ta.sma(atr1, 20)) / ta.stdev(atr1, 20)
+        zscore2 = (atr2 - ta.sma(atr2, 20)) / ta.stdev(atr2, 20)
+        
+        avg_other_zscores = (zscore1 + zscore2) / 2
+        divergence_score = math.abs(current_zscore - avg_other_zscores)
+        
+        significant_divergence = divergence_score > 1.5
+        isolated_stress = current_zscore > 1.0 and avg_other_zscores < 0.5
+        
+        vix_spike = ta.roc(vix, 1) > 10
+        vix_elevated = vix > ta.sma(vix, 20) * 1.2
+        
+        stress_level = isolated_stress ? "ISOLATED" :
+                      significant_divergence and vix_spike ? "SYSTEMIC" :
+                      significant_divergence ? "DIVERGENT" :
+                      vix_elevated ? "ELEVATED" : "NORMAL"
+        
+        breakout_signal = significant_divergence and (isolated_stress or vix_spike)
+        
+        [breakout_signal, divergence_score, stress_level]
+
+// CVD Proxy
+calculate_cvd_proxy() =>
+    if not enable_cvd_proxy
+        [false, 0.0, 0.0]
+    else
+        high_close_ratio = (close - low) / math.max(high - low, 0.0001)
+        buy_pressure = volume * high_close_ratio
+        sell_pressure = volume * (1 - high_close_ratio)
+        net_delta = buy_pressure - sell_pressure
+        
+        var float cvd = 0.0
+        if ta.change(time("D")) != 0
+            cvd := net_delta
+        else
+            cvd += net_delta
+        
+        cvd_fast = ta.ema(cvd, 20)
+        cvd_slow = ta.ema(cvd, 50)
+        cvd_momentum = (cvd_fast - cvd_slow) / math.abs(cvd_slow + 0.0001)
+        
+        lookback_bars = 20
+        price_higher = close > ta.highest(close[1], lookback_bars)
+        price_lower = close < ta.lowest(close[1], lookback_bars)
+        cvd_higher = cvd > ta.highest(cvd[1], lookback_bars)
+        cvd_lower = cvd < ta.lowest(cvd[1], lookback_bars)
+        
+        bullish_cvd_div = price_lower and not cvd_lower
+        bearish_cvd_div = price_higher and not cvd_higher
+        
+        divergence_detected = bearish_cvd_div or bullish_cvd_div
+        
+        [divergence_detected, cvd, cvd_momentum]
+
+// Direct VoV
+calculate_direct_vov() =>
+    if not enable_direct_vov
+        [0.0, false, false]
+    else
+        // Optimized array management
+        if barstate.isconfirmed
+            array.push(vov_array, ta.atr(14))
+            if array.size(vov_array) > 20
+                array.shift(vov_array)
+        
+        if array.size(vov_array) < 20
+            [0.0, false, false]
+        else
+            atr_mean = array.avg(vov_array)
+            atr_stdev = array.stdev(vov_array)
+            vov = atr_stdev / math.max(atr_mean, 0.0001)
+            
+            vov_ma = ta.sma(vov, 50)
+            vov_stdev_hist = ta.stdev(vov, 50)
+            vov_zscore = (vov - vov_ma) / math.max(vov_stdev_hist, 0.0001)
+            
+            unstable_regime = vov_zscore > 1.5
+            stabilizing_regime = vov_zscore < -1.0 and ta.change(vov_zscore) > 0
+            
+            vov_expanding = ta.change(vov) > 0 and ta.change(vov[1]) > 0
+            vol_volume_corr = ta.correlation(ta.atr(14), volume, 20)
+            decorrelation = vol_volume_corr < 0.2 and ta.sma(vol_volume_corr, 20) > 0.5
+            
+            vov_breakout_signal = (unstable_regime and vov_expanding) or (stabilizing_regime and decorrelation)
+            
+            [vov_zscore, unstable_regime, vov_breakout_signal]
+
+// ============================================================================
+// CORE RSI CALCULATIONS
+// ============================================================================
+
+price_change = ta.change(src)
+gains = math.max(price_change, 0)
+losses = math.abs(math.min(price_change, 0))
+
+// Volume-Weighted RSI
+calculate_vwrsi() =>
+    volume_sma = ta.sma(volume, 20)
+    volume_factor = volume / volume_sma
+    adjusted_volume_factor = math.pow(volume_factor, vw_sensitivity)
+    
+    vw_gains = gains * adjusted_volume_factor
+    vw_losses = losses * adjusted_volume_factor
+    
+    smoothed_vw_gains = ta.ema(vw_gains, length)
+    smoothed_vw_losses = ta.ema(vw_losses, length)
+    
+    safe_vw_gains = math.max(smoothed_vw_gains, 0.0001)
+    safe_vw_losses = math.max(smoothed_vw_losses, 0.0001)
+    
+    vw_rs = safe_vw_gains / safe_vw_losses
+    vwrsi = vw_rs > 0 ? 100.0 - (100.0 / (1.0 + vw_rs)) : 50.0
+    
+    vwrsi_centered = (vwrsi - 50.0) * 4.0
+    math.max(-200.0, math.min(200.0, vwrsi_centered))
+
+// Adaptive EMA
+adaptive_ema(src, len) =>
+    safe_len = na(len) or len <= 0 ? length : int(len)
+    safe_len := int(math.max(2, math.min(50, safe_len)))
+    
+    alpha = 2.0 / (float(safe_len) + 1.0)
+    
+    var float ema_val = na
+    if na(ema_val) or bar_index < safe_len
+        ema_val := na(src) ? 0.0 : src
+    else
+        ema_val := alpha * src + (1.0 - alpha) * ema_val
+    
+    ema_val
+
+// ATR-Adaptive RSI
+calculate_advanced_atr_rsi() =>
+    current_atr = cached_advanced_atr
+    avg_atr = cached_advanced_atr_avg
+    
+    advanced_volatility_ratio = avg_atr > 0 ? current_atr / avg_atr : 1.0
+    adjusted_advanced_ratio = math.pow(math.max(0.1, math.min(5.0, advanced_volatility_ratio)), atr_sensitivity)
+    
+    length_multiplier = 2.0 - math.min(1.8, adjusted_advanced_ratio)
+    advanced_adaptive_length = int(math.round(float(length) * length_multiplier))
+    advanced_adaptive_length := int(math.max(2, math.min(50, advanced_adaptive_length)))
+    
+    adaptive_gains = adaptive_ema(gains, advanced_adaptive_length)
+    adaptive_losses = adaptive_ema(losses, advanced_adaptive_length)
+    
+    safe_adaptive_gains = math.max(adaptive_gains, 0.0001)
+    safe_adaptive_losses = math.max(adaptive_losses, 0.0001)
+    
+    advanced_atr_rs = safe_adaptive_gains / safe_adaptive_losses
+    advanced_atr_rsi = advanced_atr_rs > 0 ? 100.0 - (100.0 / (1.0 + advanced_atr_rs)) : 50.0
+    
+    advanced_atr_rsi_centered = (advanced_atr_rsi - 50.0) * 4.0
+    math.max(-200.0, math.min(200.0, advanced_atr_rsi_centered))
+
+// Market Regime Detection
+detect_market_regime() =>
+    current_atr = cached_advanced_atr
+    avg_atr = cached_advanced_atr_avg
+    trend_strength = math.abs(ta.sma(close, 20) - ta.sma(close, 50)) / current_atr
+    volatility_regime = current_atr / avg_atr
+    
+    regime = trend_strength > 1.0 ? "TRENDING" : volatility_regime > 1.2 ? "VOLATILE" : "RANGING"
+    [regime, trend_strength, volatility_regime]
+
+// Hybrid Weighting
+calculate_advanced_hybrid_weights() =>
+    volume_strength = volume / ta.sma(volume, 20)
+    current_atr = cached_advanced_atr
+    avg_atr = cached_advanced_atr_avg
+    advanced_volatility_regime = current_atr / avg_atr
+    [regime, trend_strength, market_volatility] = detect_market_regime()
+    
+    volume_weight = 0.5
+    atr_weight = 0.5
+    
+    if hybrid_mode == "Volume-Favored"
+        volume_weight := 0.7
+        atr_weight := 0.3
+    else if hybrid_mode == "ATR-Favored"
+        volume_weight := 0.3
+        atr_weight := 0.7
+    else if hybrid_mode == "Balanced"
+        volume_weight := 0.5
+        atr_weight := 0.5
+    else // Auto mode
+        if global_cvd_divergence and volume_strength > 1.5
+            volume_weight := 0.85
+            atr_weight := 0.15
+        else if global_vov_unstable and advanced_volatility_regime > 1.4
+            volume_weight := 0.20
+            atr_weight := 0.80
+        else if global_intermarket_divergence and regime == "VOLATILE"
+            volume_weight := 0.45
+            atr_weight := 0.55
+        else if volume_strength > 1.8 and regime == "RANGING"
+            volume_weight := 0.75
+            atr_weight := 0.25
+        else if advanced_volatility_regime > 1.4 and regime == "VOLATILE"
+            volume_weight := 0.25
+            atr_weight := 0.75
+        else if regime == "TRENDING"
+            volume_weight := 0.35
+            atr_weight := 0.65
+        else
+            volume_weight := 0.5
+            atr_weight := 0.5
+    
+    [volume_weight, atr_weight]
+
+// Final RSI Calculation
+calculate_final_rsi() =>
+    if enable_hybrid
+        vwrsi_value = calculate_vwrsi()
+        advanced_atr_rsi_value = calculate_advanced_atr_rsi()
+        [vol_weight, atr_weight] = calculate_advanced_hybrid_weights()
+        
+        hybrid_result = (vwrsi_value * vol_weight + advanced_atr_rsi_value * atr_weight)
+        math.max(-200, math.min(200, hybrid_result))
+    else
+        smoothed_gains = ta.ema(gains, length)
+        smoothed_losses = ta.ema(losses, length)
+        safe_gains = math.max(smoothed_gains, 0.0001)
+        safe_losses = math.max(smoothed_losses, 0.0001)
+        rs = safe_gains / safe_losses
+        rsi_traditional = rs > 0 ? 100.0 - (100.0 / (1.0 + rs)) : 50.0
+        traditional_centered = (rsi_traditional - 50.0) * 4.0
+        math.max(-200.0, math.min(200.0, traditional_centered))
+
+// ============================================================================
+// MAIN CALCULATIONS
+// ============================================================================
+
+// Update ATR cache
+[new_atr, new_avg, atr_updated] = calculate_advanced_atr_cached()
+if atr_updated
+    cached_advanced_atr := new_atr
+    cached_advanced_atr_avg := new_avg
+    last_atr_calc_bar := bar_index
+
+// Get intermarket data
+imd = get_intermarket_data()
+
+// Calculate raw RSI
+raw_final_rsi = calculate_final_rsi()
+
+// VOLUME NORMALIZATION - Apply to final RSI
+[volume_participation, signal_threshold] = calculate_volume_normalization()
+global_volume_participation := volume_participation
+global_signal_threshold := signal_threshold
+
+// Update volume baseline if needed
+[baseline, needs_update] = calculate_volume_baseline()
+if needs_update
+    volume_baseline := baseline
+    last_volume_baseline_bar := bar_index
+
+// Scale the RSI by volume participation
+volume_adjusted_rsi = raw_final_rsi * volume_participation
+
+// Apply statistical significance filter
+dampening_factor = math.abs(volume_adjusted_rsi) < signal_threshold ? 0.3 : 1.0
+final_rsi = volume_adjusted_rsi * dampening_factor
+
+// Calculate all detection values
+[delta_calc, cum_delta_calc, delta_div_calc] = calculate_volume_delta()
+[rvol_calc, rvol_spike_calc, vol_pattern_calc] = detect_volume_anomaly()
+[vol_sig_calc, vol_sig_conf_calc, breakout_imminent_calc] = detect_volatility_signature()
+[vwap_calc, vwap_upper_calc, vwap_lower_calc, near_band_calc] = calculate_vwap_bands()
+
+// Calculate quant-grade values
+[intermarket_div, volatility_div_score, market_stress] = calculate_intermarket_divergence(imd.atr1, imd.atr2, imd.atr3, imd.vix)
+[cvd_div, cvd_value, cvd_mom] = calculate_cvd_proxy()
+[vov_z, vov_unstable, vov_breakout] = calculate_direct_vov()
+
+// Update globals
+global_delta := delta_calc
+global_cum_delta := cum_delta_calc
+global_rvol := rvol_calc
+global_vol_pattern := vol_pattern_calc
+global_vol_signature := vol_sig_calc
+global_breakout_imminent := breakout_imminent_calc
+global_vwap_value := vwap_calc
+global_vwap_upper := vwap_upper_calc
+global_vwap_lower := vwap_lower_calc
+global_near_band := near_band_calc
+delta_divergence_alert := delta_div_calc
+rvol_spike_alert := rvol_spike_calc
+
+global_intermarket_divergence := intermarket_div
+global_volatility_divergence_score := volatility_div_score
+global_cvd_divergence := cvd_div
+global_cvd_momentum := cvd_mom
+global_vov_zscore := vov_z
+global_vov_unstable := vov_unstable
+global_market_stress := market_stress
+
+// Divergence detection
+[bullish_div_temp, bearish_div_temp, div_strength_temp] = detect_divergence(final_rsi)
+bullish_div := bullish_div_temp
+bearish_div := bearish_div_temp
+div_strength := div_strength_temp
+
+// ============================================================================
+// VISUAL ELEMENTS
+// ============================================================================
+
+// Dynamic levels calculation
+calculate_dynamic_levels() =>
+    [regime, trend_strength, volatility] = detect_market_regime()
+    
+    base_ob = ((overbought - 50) * 2) * 2
+    base_os = ((oversold - 50) * 2) * 2
+    
+    dynamic_ob = base_ob
+    dynamic_os = base_os
+    
+    current_atr = cached_advanced_atr
+    volatility_percentile = ta.percentrank(current_atr, 100)
+    advanced_vol_adjustment = (volatility_percentile - 50) * 1.0
+    
+    trend_percentile = ta.percentrank(ta.ema(close, 20), 100)
+    advanced_trend_adjustment = trend_percentile > 85.0 ? 40.0 : trend_percentile < 15.0 ? -40.0 : 0.0
+    
+    dynamic_ob := math.min(170.0, base_ob + advanced_vol_adjustment + advanced_trend_adjustment)
+    dynamic_os := math.max(-170.0, base_os - advanced_vol_adjustment - advanced_trend_adjustment)
+    
+    [dynamic_ob, dynamic_os]
+
+// Visual transformation functions
+transform_rsi_for_display(rsi_value) =>
+    if visual_mode == "Traditional"
+        (rsi_value + 200) / 4
+    else
+        rsi_value
+
+transform_level_for_display(level_value) =>
+    if visual_mode == "Traditional"
+        (level_value + 200) / 4
+    else
+        level_value
+
+// Get display values
+[dynamic_ob, dynamic_os] = calculate_dynamic_levels()
+display_rsi = transform_rsi_for_display(final_rsi)
+display_ob = transform_level_for_display(dynamic_ob)
+display_os = transform_level_for_display(dynamic_os)
+display_zero = transform_level_for_display(0)
+
+// Calculate intensity for gradient
+rsi_intensity = math.abs(final_rsi) / 200.0
+gradient_opacity = 90 - int(rsi_intensity * 70)
+
+// Main plots
+histogram_color = final_rsi > 0 ? color.new(lime_color, gradient_opacity) : color.new(bright_red, gradient_opacity)
+rsi_plot = plot(display_rsi, "QPulse Pro", color=histogram_color, linewidth=3, style=plot.style_histogram)
+zero_plot = plot(display_zero, "ZERO LINE", color=white_color, linewidth=3)
+ob_plot = plot(show_tech_levels ? display_ob : na, "Dynamic Overbought", color=color.new(bright_red, 60), linewidth=2)
+os_plot = plot(show_tech_levels ? display_os : na, "Dynamic Oversold", color=color.new(lime_color, 60), linewidth=2)
+
+// Zone fills
+upper_fill_color = show_zones and show_tech_levels ? color.new(bright_red, 92) : color.new(#000000, 100)
+lower_fill_color = show_zones and show_tech_levels ? color.new(lime_color, 92) : color.new(#000000, 100)
+
+fill(rsi_plot, ob_plot, color=upper_fill_color, title="Overbought Zone")
+fill(rsi_plot, os_plot, color=lower_fill_color, title="Oversold Zone")
+
+// Key level lines
+extreme_ob = visual_mode == "Traditional" ? 80.0 : transform_level_for_display(100.0)
+extreme_os = visual_mode == "Traditional" ? 20.0 : transform_level_for_display(-100.0)
+
+hline(show_tech_levels ? extreme_ob : na, "Extreme Overbought", color=color.new(bright_red, 70), linestyle=hline.style_dotted, linewidth=1)
+hline(show_tech_levels ? extreme_os : na, "Extreme Oversold", color=color.new(lime_color, 70), linestyle=hline.style_dotted, linewidth=1)
+
+// Divergence signals
+if show_divergences and enable_divergence_engine
+    if bearish_div[5]
+        label.new(bar_index-5, display_rsi + 10, "▼", color=color.new(bright_red, 0), style=label.style_label_down, size=size.small, tooltip="Bearish Divergence\nStrength: " + str.tostring(div_strength, "#.1"))
+    
+    if bullish_div[5]
+        label.new(bar_index-5, display_rsi - 10, "▲", color=color.new(lime_color, 0), style=label.style_label_up, size=size.small, tooltip="Bullish Divergence\nStrength: " + str.tostring(div_strength, "#.1"))
+
+// ============================================================================
+// OPTIMIZED HEATMAP
+// ============================================================================
+
+// Heatmap color function
+getHeatmapColorAndOpacity(rsi_value, intensity) =>
+    base_color = rsi_value > 0 ? lime_color : bright_red
+    opacity = 90 - int(intensity * 70)
+    [base_color, opacity]
+
+// Clear old heatmap
+if barstate.isconfirmed
+    while array.size(heatmap_boxes) > 0
+        b = array.pop(heatmap_boxes)
+        box.delete(b)
+
+// Draw heatmap
+if show_heatmap and barstate.islast
+    step = heatmap_lookback > 100 ? 2 : 1
+    
+    for i = 0 to heatmap_lookback - 1 by step
+        if i < bar_index
+            historical_rsi = nz(final_rsi[i], 0)
+            
+            smoothed_value = historical_rsi
+            if heatmap_smoothing > 1
+                sum = 0.0
+                count = 0
+                for j = -heatmap_smoothing to heatmap_smoothing
+                    idx = i + j
+                    if idx >= 0 and idx < bar_index
+                        sum += nz(final_rsi[idx], 0)
+                        count += 1
+                smoothed_value := sum / math.max(count, 1)
+            
+            intensity = math.abs(smoothed_value) / 200.0
+            [heat_color, opacity] = getHeatmapColorAndOpacity(smoothed_value, intensity)
+            
+            if smoothed_value > 0
+                heat_box_top = box.new(left=bar_index - i - 1, top=200 + heatmap_height, right=bar_index - i, bottom=200, bgcolor=color.new(heat_color, opacity), border_width=0)
+                array.push(heatmap_boxes, heat_box_top)
+            else if smoothed_value < 0
+                heat_box_bottom = box.new(left=bar_index - i - 1, top=-200, right=bar_index - i, bottom=-200 - heatmap_height, bgcolor=color.new(heat_color, opacity), border_width=0)
+                array.push(heatmap_boxes, heat_box_bottom)
+
+// ============================================================================
+// ALERT CONDITIONS
+// ============================================================================
+
+alertcondition(enable_alerts and final_rsi > dynamic_ob, "QPulse Pro Overbought", "QPulse Pro: Overbought Condition")
+alertcondition(enable_alerts and final_rsi < dynamic_os, "QPulse Pro Oversold", "QPulse Pro: Oversold Condition")
+alertcondition(enable_alerts and ta.cross(final_rsi, 0), "QPulse Pro Zero Cross", "QPulse Pro: CRITICAL - Zero Line Cross!")
+
+advanced_volatility_spike = enable_advanced_atr and cached_advanced_atr > ta.sma(cached_advanced_atr, 20) * 1.8
+alertcondition(enable_alerts and advanced_volatility_spike, "Advanced Volatility Spike", "QPulse Pro: High Volatility Detected!")
+
+alertcondition(enable_alerts and global_breakout_imminent, "Breakout Imminent", "QPulse Pro: Breakout Imminent! Volatility Coiling")
+alertcondition(enable_alerts and delta_divergence_alert, "Volume Delta Divergence", "QPulse Pro: Volume Delta Divergence Detected!")
+alertcondition(enable_alerts and rvol_spike_alert, "Volume Spike", "QPulse Pro: Extreme Volume Spike Detected!")
+alertcondition(enable_alerts and bullish_div, "Bullish Divergence", "QPulse Pro: Bullish Divergence Signal!")
+alertcondition(enable_alerts and bearish_div, "Bearish Divergence", "QPulse Pro: Bearish Divergence Signal!")
+
+alertcondition(enable_alerts and global_intermarket_divergence, "Intermarket Divergence", "QPulse Pro: QUANT - Intermarket Volatility Divergence!")
+alertcondition(enable_alerts and global_cvd_divergence, "CVD Divergence", "QPulse Pro: QUANT - Cumulative Delta Divergence!")
+alertcondition(enable_alerts and global_vov_unstable, "VoV Unstable", "QPulse Pro: QUANT - Volatility Regime Unstable!")
+alertcondition(enable_alerts and global_market_stress == "SYSTEMIC", "Systemic Stress", "QPulse Pro: QUANT - Systemic Market Stress Detected!")
+
+quant_breakout_confirmed = (global_intermarket_divergence or global_cvd_divergence) and 
+                          (global_vov_unstable or global_breakout_imminent) and
+                          math.abs(final_rsi) > 60
+alertcondition(enable_alerts and quant_breakout_confirmed, "Quant Breakout Confirmed", "QPulse Pro: QUANT BREAKOUT - Multiple Signals Aligned!")
+
+alertcondition(enable_alerts and final_rsi > 150, "Extreme Bullish", "QPulse Pro: EXTREME Bullish Momentum!")
+alertcondition(enable_alerts and final_rsi < -150, "Extreme Bearish", "QPulse Pro: EXTREME Bearish Momentum!")
+
+// Volume-specific alerts
+alertcondition(enable_alerts and global_volume_participation < 0.3, "Low Volume Warning", "QPulse Pro: Low Volume Participation - Signals Dampened")
+alertcondition(enable_alerts and global_volume_participation < 0.5 and math.abs(final_rsi) > 100, "Low Volume Extreme", "QPulse Pro: Extreme Reading on Low Volume - Use Caution")
+
+// ============================================================================
+// OUTPUT VALUES (for data window)
+// ============================================================================
+
+plot(display_rsi, "QPulse Pro Value", display=display.data_window)
+plot(enable_advanced_atr ? cached_advanced_atr : na, "Advanced ATR", display=display.data_window, color=advanced_glow)
+plot(enable_volume_delta ? global_delta : na, "Volume Delta", display=display.data_window, color=purple_color)
+plot(enable_rvol_detection ? global_rvol : na, "Relative Volume", display=display.data_window, color=pink_color)
+plot(enable_intermarket_divergence ? global_volatility_divergence_score : na, "Intermarket Divergence Score", display=display.data_window, color=orange_color)
+plot(enable_cvd_proxy ? global_cvd_momentum : na, "CVD Momentum", display=display.data_window, color=cyan_color)
+plot(enable_direct_vov ? global_vov_zscore : na, "VoV Z-Score", display=display.data_window, color=yellow_color)
+plot(enable_volume_norm ? global_volume_participation : na, "Volume Participation", display=display.data_window, color=orange_color)
+plot(enable_volume_norm ? global_signal_threshold : na, "Signal Threshold", display=display.data_window, color=yellow_color)
