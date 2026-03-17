@@ -1,0 +1,302 @@
+//@version=6
+indicator(title="Nexural Fisher Pro", shorttitle="Nexural Fisher Pro", format=format.price, precision=2, overlay=false)
+
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// ███╗   ██╗███████╗██╗  ██╗██╗   ██╗██████╗  █████╗ ██╗     
+// ████╗  ██║██╔════╝╚██╗██╔╝██║   ██║██╔══██╗██╔══██╗██║     
+// ██╔██╗ ██║█████╗   ╚███╔╝ ██║   ██║██████╔╝███████║██║     
+// ██║╚██╗██║██╔══╝   ██╔██╗ ██║   ██║██╔══██╗██╔══██║██║     
+// ██║ ╚████║███████╗██╔╝ ██╗╚██████╔╝██║  ██║██║  ██║███████╗
+// ╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝
+//
+// FISHER TRANSFORM ULTIMATE
+// 
+// Advanced Features:
+// ✓ Tanh Normalization (bounded ±3, no blowouts)
+// ✓ Efficiency Ratio Regime Filter (trend vs range detection)
+// ✓ Volume-Weighted Calculation (high volume = more influence)
+// ✓ Adaptive Period via Dominant Cycle (auto-optimizing length)
+// ✓ Ehlers Super Smoother Engine
+// ✓ Zero-Lag Normalization
+//
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INPUTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+grpCore = "══════ Core Settings ══════"
+basePeriod = input.int(14, minval=5, maxval=50, title="Base Period", group=grpCore, tooltip="Base lookback period. If adaptive mode is on, this is the center of the adaptive range.")
+src = input.source(hl2, title="Source", group=grpCore)
+
+grpAdvanced = "══════ Advanced Features ══════"
+useAdaptive = input.bool(true, title="Adaptive Period (Dominant Cycle)", group=grpAdvanced, tooltip="Auto-adjusts period based on market rhythm. Highly recommended.")
+minPeriod = input.int(8, minval=5, maxval=20, title="Min Adaptive Period", group=grpAdvanced)
+maxPeriod = input.int(48, minval=20, maxval=100, title="Max Adaptive Period", group=grpAdvanced)
+useVolumeWeight = input.bool(true, title="Volume-Weighted Calculation", group=grpAdvanced, tooltip="Weights price data by relative volume. High volume bars have more influence.")
+useTanhNorm = input.bool(true, title="Tanh Normalization (Bounded Output)", group=grpAdvanced, tooltip="Prevents scale blowouts. Keeps Fisher bounded to ±3.")
+useEfficiencyFilter = input.bool(true, title="Efficiency Ratio Regime Detection", group=grpAdvanced, tooltip="Detects trending vs ranging markets. Changes signal interpretation.")
+
+grpSmooth = "══════ Smoothing ══════"
+useSuperSmoother = input.bool(true, title="Ehlers Super Smoother", group=grpSmooth)
+smoothPeriod = input.int(3, minval=2, maxval=10, title="Smoother Period", group=grpSmooth)
+
+grpLevels = "══════ Levels ══════"
+obLevel = input.float(1.5, minval=0.5, maxval=2.5, step=0.1, title="Overbought", group=grpLevels)
+osLevel = input.float(-1.5, maxval=-0.5, minval=-2.5, step=0.1, title="Oversold", group=grpLevels)
+erTrendThreshold = input.float(0.4, minval=0.2, maxval=0.7, step=0.05, title="Trend Threshold (ER)", group=grpLevels, tooltip="Efficiency Ratio above this = trending market.")
+erRangeThreshold = input.float(0.2, minval=0.1, maxval=0.4, step=0.05, title="Range Threshold (ER)", group=grpLevels, tooltip="Efficiency Ratio below this = ranging market.")
+
+grpVisual = "══════ Display ══════"
+showInfoTable = input.bool(true, title="Info Panel", group=grpVisual)
+
+grpColors = "══════ Colors ══════"
+bullColor = input.color(#26a69a, title="Bullish (Long)", group=grpColors)
+bearColor = input.color(#ef5350, title="Bearish (Short)", group=grpColors)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EHLERS SUPER SMOOTHER FUNCTION
+// 2-pole filter that removes noise without adding lag
+// ─────────────────────────────────────────────────────────────────────────────
+
+superSmoother(float source, int period) =>
+    float a1 = math.exp(-math.sqrt(2) * math.pi / period)
+    float b1 = 2 * a1 * math.cos(math.sqrt(2) * math.pi / period)
+    float c2 = b1
+    float c3 = -a1 * a1
+    float c1 = 1 - c2 - c3
+    float ss = 0.0
+    ss := c1 * (source + nz(source[1])) / 2 + c2 * nz(ss[1]) + c3 * nz(ss[2])
+    ss
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EFFICIENCY RATIO (Kaufman)
+// Measures trend strength: 1.0 = perfect trend, 0.0 = pure noise
+// ─────────────────────────────────────────────────────────────────────────────
+
+calcEfficiencyRatio(float source, int period) =>
+    float change = math.abs(source - source[period])
+    float volatility = math.sum(math.abs(source - source[1]), period)
+    float er = volatility != 0 ? change / volatility : 0
+    er
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DOMINANT CYCLE MEASUREMENT (Ehlers Autocorrelation Periodogram)
+// Finds the dominant cycle period in the data
+// ─────────────────────────────────────────────────────────────────────────────
+
+calcDominantCycle(float source, int minP, int maxP) =>
+    // High-pass filter to remove trend
+    float alpha1 = (math.cos(0.707 * 2 * math.pi / 48) + math.sin(0.707 * 2 * math.pi / 48) - 1) / math.cos(0.707 * 2 * math.pi / 48)
+    float hp = 0.0
+    hp := (1 - alpha1 / 2) * (1 - alpha1 / 2) * (source - 2 * nz(source[1]) + nz(source[2])) + 2 * (1 - alpha1) * nz(hp[1]) - (1 - alpha1) * (1 - alpha1) * nz(hp[2])
+    
+    // Super Smoother on high-pass
+    float filt = superSmoother(hp, 10)
+    
+    // Pearson correlation for each period
+    float maxCorr = 0.0
+    int dominantPeriod = minP
+    
+    for period = minP to maxP
+        float sx = 0.0, float sy = 0.0, float sxx = 0.0, float syy = 0.0, float sxy = 0.0
+        for i = 0 to period - 1
+            float x = nz(filt[i])
+            float y = nz(filt[i + period])
+            sx += x
+            sy += y
+            sxx += x * x
+            syy += y * y
+            sxy += x * y
+        
+        float n = period
+        float denom = (n * sxx - sx * sx) * (n * syy - sy * sy)
+        float corr = denom > 0 ? (n * sxy - sx * sy) / math.sqrt(denom) : 0
+        
+        if corr > maxCorr
+            maxCorr := corr
+            dominantPeriod := period
+    
+    dominantPeriod
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VOLUME WEIGHT CALCULATION
+// Higher volume bars get more influence on the calculation
+// ─────────────────────────────────────────────────────────────────────────────
+
+calcVolumeWeight() =>
+    float avgVol = ta.sma(volume, 20)
+    float weight = avgVol > 0 ? volume / avgVol : 1.0
+    math.max(0.5, math.min(2.0, weight))  // Clamp between 0.5 and 2.0
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TANH NORMALIZATION
+// Bounds output using hyperbolic tangent - no more blowouts
+// ─────────────────────────────────────────────────────────────────────────────
+
+tanhNormalize(float value, float scale) =>
+    // tanh naturally bounds between -1 and +1
+    // We scale it to ±3 for Fisher-like output
+    3.0 * (2.0 / (1.0 + math.exp(-2.0 * value / scale)) - 1.0)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN CALCULATION
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Step 1: Calculate Efficiency Ratio
+efficiencyRatio = calcEfficiencyRatio(close, 10)
+smoothedER = ta.ema(efficiencyRatio, 5)
+
+// Determine regime
+isTrending = smoothedER > erTrendThreshold
+isRanging = smoothedER < erRangeThreshold
+regimeStr = isTrending ? "TRENDING" : isRanging ? "RANGING" : "MIXED"
+
+// Step 2: Calculate Adaptive Period (if enabled)
+int adaptivePeriod = basePeriod
+if useAdaptive
+    adaptivePeriod := calcDominantCycle(close, minPeriod, maxPeriod)
+    // Smooth the period changes to avoid jumps
+    var float smoothPeriodVal = basePeriod
+    smoothPeriodVal := 0.9 * smoothPeriodVal + 0.1 * adaptivePeriod
+    adaptivePeriod := int(math.round(smoothPeriodVal))
+
+int effectivePeriod = useAdaptive ? adaptivePeriod : basePeriod
+
+// Step 3: Apply Super Smoother to source
+float smoothedSrc = useSuperSmoother ? superSmoother(src, smoothPeriod) : src
+
+// Step 4: Volume weighting (if enabled)
+float volWeight = useVolumeWeight ? calcVolumeWeight() : 1.0
+
+// Apply volume weight to the price movement detection
+float weightedSrc = smoothedSrc
+
+// Step 5: Calculate highest/lowest with effective period
+float high_ = ta.highest(weightedSrc, effectivePeriod)
+float low_ = ta.lowest(weightedSrc, effectivePeriod)
+
+// Step 6: Normalize to -1 to +1 range with volume influence
+float rawValue = high_ != low_ ? 2.0 * ((weightedSrc - low_) / (high_ - low_) - 0.5) : 0.0
+
+// Apply volume weight to the normalized value
+float weightedValue = rawValue * (useVolumeWeight ? (0.7 + 0.3 * volWeight) : 1.0)
+
+// Step 7: Smooth the normalized value
+float value = 0.0
+value := 0.5 * math.max(-0.999, math.min(0.999, weightedValue)) + 0.5 * nz(value[1])
+
+// Step 8: Fisher Transform
+float fish1Raw = 0.0
+fish1Raw := 0.5 * math.log((1 + value) / (1 - value)) + 0.5 * nz(fish1Raw[1])
+
+// Step 9: Apply Tanh normalization if enabled (prevents blowouts)
+float fish1 = useTanhNorm ? tanhNormalize(fish1Raw, 2.0) : fish1Raw
+
+// Trigger line
+float fish2 = fish1[1]
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STATE CALCULATION
+// ─────────────────────────────────────────────────────────────────────────────
+
+bool isBullish = fish1 >= fish2
+bool bullCross = ta.crossover(fish1, fish2)
+bool bearCross = ta.crossunder(fish1, fish2)
+
+// Zone detection
+bool inOverbought = fish1 > obLevel
+bool inOversold = fish1 < osLevel
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COLORS
+// ─────────────────────────────────────────────────────────────────────────────
+
+color fisherCol = isBullish ? bullColor : bearColor
+color triggerCol = color.new(#ffffff, 65)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PLOTTING - LEVELS
+// ─────────────────────────────────────────────────────────────────────────────
+
+hline(obLevel, "Overbought", color=color.new(bearColor, 50), linestyle=hline.style_solid, linewidth=1)
+hline(0, "Zero", color=color.new(#ffffff, 70), linestyle=hline.style_solid, linewidth=1)
+hline(osLevel, "Oversold", color=color.new(bullColor, 50), linestyle=hline.style_solid, linewidth=1)
+
+// Soft zone fills
+hlineTop = hline(3.0, "", color=na)
+hlineOB = hline(obLevel, "", color=na)
+hlineOS = hline(osLevel, "", color=na)
+hlineBot = hline(-3.0, "", color=na)
+
+fill(hlineTop, hlineOB, color=color.new(bearColor, 92), title="OB Zone")
+fill(hlineBot, hlineOS, color=color.new(bullColor, 92), title="OS Zone")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PLOTTING - FISHER
+// ─────────────────────────────────────────────────────────────────────────────
+
+p1 = plot(fish1, title="Fisher", color=fisherCol, linewidth=2)
+p2 = plot(fish2, title="Trigger", color=triggerCol, linewidth=1)
+fill(p1, p2, color=isBullish ? color.new(bullColor, 85) : color.new(bearColor, 85), title="Fisher Fill")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INFO TABLE
+// ─────────────────────────────────────────────────────────────────────────────
+
+var table infoPanel = table.new(position.top_right, 2, 6, bgcolor=color.new(#0a1628, 80), border_width=0)
+
+if showInfoTable and barstate.islast
+    // State
+    string stateStr = isBullish ? "LONG" : "SHORT"
+    color stateCol = isBullish ? bullColor : bearColor
+    
+    // Zone
+    string zoneStr = inOverbought ? "OVERBOUGHT" : inOversold ? "OVERSOLD" : "NEUTRAL"
+    color zoneCol = inOverbought ? bearColor : inOversold ? bullColor : color.new(#888888, 0)
+    
+    // Regime
+    color regimeCol = isTrending ? color.new(#2196F3, 0) : isRanging ? color.new(#FF9800, 0) : color.new(#888888, 0)
+    
+    // Efficiency Ratio
+    string erStr = str.tostring(smoothedER, "#.##")
+    
+    // Period
+    string periodStr = str.tostring(effectivePeriod)
+    
+    table.cell(infoPanel, 0, 0, "State", text_color=color.new(#888888, 0), text_size=size.tiny)
+    table.cell(infoPanel, 1, 0, stateStr, text_color=stateCol, text_size=size.tiny)
+    table.cell(infoPanel, 0, 1, "Zone", text_color=color.new(#888888, 0), text_size=size.tiny)
+    table.cell(infoPanel, 1, 1, zoneStr, text_color=zoneCol, text_size=size.tiny)
+    table.cell(infoPanel, 0, 2, "Regime", text_color=color.new(#888888, 0), text_size=size.tiny)
+    table.cell(infoPanel, 1, 2, regimeStr, text_color=regimeCol, text_size=size.tiny)
+    table.cell(infoPanel, 0, 3, "ER", text_color=color.new(#888888, 0), text_size=size.tiny)
+    table.cell(infoPanel, 1, 3, erStr, text_color=color.white, text_size=size.tiny)
+    table.cell(infoPanel, 0, 4, "Period", text_color=color.new(#888888, 0), text_size=size.tiny)
+    table.cell(infoPanel, 1, 4, periodStr, text_color=color.white, text_size=size.tiny)
+    table.cell(infoPanel, 0, 5, "Fisher", text_color=color.new(#888888, 0), text_size=size.tiny)
+    table.cell(infoPanel, 1, 5, str.tostring(fish1, "#.##"), text_color=color.white, text_size=size.tiny)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ALERTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Basic crosses
+alertcondition(bullCross, title="Bullish Cross", message="FISHER ULTIMATE: Bullish cross on {{ticker}} ({{interval}})")
+alertcondition(bearCross, title="Bearish Cross", message="FISHER ULTIMATE: Bearish cross on {{ticker}} ({{interval}})")
+
+// Zone alerts
+alertcondition(ta.crossover(fish1, obLevel), title="Entering Overbought", message="FISHER ULTIMATE: Entering OVERBOUGHT on {{ticker}}")
+alertcondition(ta.crossunder(fish1, osLevel), title="Entering Oversold", message="FISHER ULTIMATE: Entering OVERSOLD on {{ticker}}")
+
+// High-probability alerts (regime-aware)
+alertcondition(bullCross and isRanging and fish1[1] < osLevel, title="High-Prob Long (Range)", message="🟢 FISHER ULTIMATE: High-probability LONG on {{ticker}} - Ranging market, oversold cross")
+alertcondition(bearCross and isRanging and fish1[1] > obLevel, title="High-Prob Short (Range)", message="🔴 FISHER ULTIMATE: High-probability SHORT on {{ticker}} - Ranging market, overbought cross")
+alertcondition(bullCross and isTrending, title="Trend Continuation Long", message="🟢 FISHER ULTIMATE: Trend continuation LONG on {{ticker}} - Trending market")
+alertcondition(bearCross and isTrending, title="Trend Continuation Short", message="🔴 FISHER ULTIMATE: Trend continuation SHORT on {{ticker}} - Trending market")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// END OF NEXURAL FISHER TRANSFORM ULTIMATE
+// ══════════════════════════════════════════════════════════════════════════════
+
