@@ -1,0 +1,321 @@
+//@version=6
+indicator("QFA Pro v3.0 - Elite Refined", "QFA-Elite", overlay=false)
+
+color RED_EXTREME = color.new(#8B0000, 0)
+color RED_STRONG = color.new(#DC143C, 0)
+color RED_MODERATE = color.new(#FF0000, 0)
+color RED_MILD = color.new(#FF4444, 20)
+color RED_SLIGHT = color.new(#FF6B6B, 40)
+color GREEN_EXTREME = color.new(#006400, 0)
+color GREEN_STRONG = color.new(#008000, 0)
+color GREEN_MODERATE = color.new(#00AA00, 0)
+color GREEN_MILD = color.new(#22DD22, 20)
+color GREEN_SLIGHT = color.new(#66FF66, 40)
+color INSTANT_GOLD = color.new(#FFD700, 0)
+color WARNING_GOLD = color.new(#FFA500, 0)
+color EARLY_GOLD = color.new(#FFED4E, 30)
+color NEUTRAL_GRAY = color.new(#808080, 30)
+
+flip_visual = input.bool(false, "Flip Visual", group="Visual Settings")
+lookback = input.int(14, "Lookback Period", minval=8, maxval=30, group="Core Settings")
+zlema_period = input.int(5, "Smoothing", minval=3, maxval=12, group="Responsiveness")
+base_threshold = input.int(40, "Base Signal Threshold", minval=30, maxval=70, group="Responsiveness", tooltip="LOWERED to 40 for more signals")
+enable_divergence = input.bool(true, "RSI Divergence (25pts)", group="Signal Components")
+enable_support = input.bool(true, "Support Bounce (20pts)", group="Signal Components")
+enable_volume = input.bool(true, "Volume Absorption (15pts)", group="Signal Components")
+enable_momentum = input.bool(true, "Peak Detection (20pts)", group="Signal Components")
+enable_poc = input.bool(true, "POC Magnet (10pts)", group="Signal Components")
+rsi_period = input.int(7, "RSI Period", minval=5, maxval=14, group="Fine Tune")
+divergence_lookback = input.int(8, "Divergence Lookback", minval=5, maxval=15, group="Fine Tune")
+histogram_width = input.int(4, "Histogram Width", minval=1, maxval=5, group="Display")
+
+zlema(src, length) =>
+    lag = int((length - 1) / 2)
+    ema_data = src + (src - src[lag])
+    ta.ema(ema_data, length)
+
+atr_value = ta.atr(14)
+atr_percentile = ta.percentrank(atr_value, 50)
+vol_regime = atr_percentile > 80 ? "HIGH" : atr_percentile < 20 ? "LOW" : "NORMAL"
+
+fear_raw = ((ta.highest(close, lookback) - low) / ta.highest(close, lookback)) * 100
+atr_adjustment = atr_percentile > 50 ? 1.0 + (atr_percentile - 50) / 100 : 1.0
+fear_raw_normalized = fear_raw * atr_adjustment
+fear_index = zlema(fear_raw_normalized, zlema_period)
+
+instant_threshold = vol_regime == "HIGH" ? base_threshold * 1.3 : vol_regime == "LOW" ? base_threshold * 0.7 : base_threshold
+
+instant_momentum = fear_index - fear_index[1]
+instant_accel = instant_momentum - instant_momentum[1]
+is_peak_bar = enable_momentum and fear_index[1] > fear_index and fear_index[1] > fear_index[2] and instant_accel < 0
+is_momentum_shift = enable_momentum and fear_index > 65 and instant_momentum < 0 and instant_accel < -2
+
+bb_basis = ta.sma(close, 20)
+bb_dev = ta.stdev(close, 20)
+bb_upper = bb_basis + 2 * bb_dev
+bb_lower = bb_basis - 2 * bb_dev
+bb_bandwidth = (bb_upper - bb_lower) / bb_basis * 100
+bb_squeeze = bb_bandwidth < ta.percentile_nearest_rank(bb_bandwidth, 50, 20)
+
+bullish_divergence = false
+if enable_divergence
+    rsi_fast = ta.rsi(close, rsi_period)
+    price_lower_low = low < ta.lowest(low[1], divergence_lookback)
+    rsi_higher_low = rsi_fast > ta.lowest(rsi_fast[1], divergence_lookback)
+    bullish_divergence := price_lower_low and rsi_higher_low and fear_index > 55
+
+is_bouncing_support = false
+support_strength = 0
+
+if enable_support
+    is_forming_low = low < low[1] and low < low[2]
+    is_strong_bounce = close > open and (close - low) > (high - low) * 0.6
+    pivot_low = ta.pivotlow(low, 2, 2)
+    is_near_pivot = not na(pivot_low) and math.abs(close - pivot_low) < atr_value * 0.4
+    
+    if not na(pivot_low)
+        for i = 1 to 50
+            if math.abs(low[i] - pivot_low) < atr_value * 0.3
+                support_strength += 1
+    
+    is_bouncing_support := (is_forming_low and is_strong_bounce) or (is_near_pivot and is_strong_bounce)
+
+price_round = math.round(close)
+is_near_round = math.abs(close - price_round) / close < 0.002
+is_near_half = math.abs(close - (price_round - 0.5)) / close < 0.002 or math.abs(close - (price_round + 0.5)) / close < 0.002
+round_number_magnet = is_near_round or is_near_half
+
+big_volume_green = false
+wick_rejection = false
+volume_climax = false
+
+if enable_volume
+    vol_avg = ta.sma(volume, 20)
+    vol_spike = volume > vol_avg * 1.4
+    green_candle = close > open
+    big_volume_green := green_candle and vol_spike
+    
+    lower_wick = math.min(open, close) - low
+    body = math.abs(close - open)
+    upper_wick = high - math.max(open, close)
+    wick_rejection := lower_wick > body * 2.5 and lower_wick > upper_wick and close > open
+    
+    vol_increasing = volume > volume[1] and volume[1] > volume[2] and volume[2] > volume[3]
+    extreme_vol = volume > vol_avg * 2.5
+    momentum_extreme = math.abs(instant_momentum) > 5
+    volume_climax := vol_increasing and extreme_vol and momentum_extreme
+
+poc_magnet = false
+real_poc = 0.0
+vp_lookback = 30
+poc_high = ta.highest(high, vp_lookback)
+poc_low = ta.lowest(low, vp_lookback)
+price_levels = 20
+level_size = (poc_high - poc_low) / price_levels
+
+var vol_array = array.new_float(price_levels, 0)
+
+if barstate.isconfirmed and bar_index % vp_lookback == 0
+    array.fill(vol_array, 0)
+
+for i = 0 to price_levels - 1
+    level_price = poc_low + (level_size * i)
+    if low <= level_price and high >= level_price
+        current_vol = array.get(vol_array, i)
+        array.set(vol_array, i, current_vol + volume)
+
+if enable_poc and array.size(vol_array) > 0 and array.max(vol_array) > 0
+    max_vol_index = array.indexof(vol_array, array.max(vol_array))
+    real_poc := poc_low + (level_size * max_vol_index) + (level_size / 2)
+    poc_distance = math.abs(close - real_poc) / close * 100
+    poc_magnet := poc_distance < 0.5 and fear_index > 60
+
+value_area_high = 0.0
+value_area_low = 0.0
+
+if enable_poc and array.size(vol_array) > 0
+    total_volume = array.sum(vol_array)
+    target_volume = total_volume * 0.7
+    max_vol_index = array.indexof(vol_array, array.max(vol_array))
+    accumulated_vol = array.get(vol_array, max_vol_index)
+    upper_index = max_vol_index
+    lower_index = max_vol_index
+    
+    while accumulated_vol < target_volume and (upper_index < price_levels - 1 or lower_index > 0)
+        upper_vol = upper_index < price_levels - 1 ? array.get(vol_array, upper_index + 1) : 0
+        lower_vol = lower_index > 0 ? array.get(vol_array, lower_index - 1) : 0
+        
+        if upper_vol > lower_vol and upper_index < price_levels - 1
+            upper_index += 1
+            accumulated_vol += upper_vol
+        else if lower_index > 0
+            lower_index -= 1
+            accumulated_vol += lower_vol
+        else
+            break
+    
+    value_area_high := poc_low + (level_size * upper_index)
+    value_area_low := poc_low + (level_size * lower_index)
+
+is_in_value_area = close >= value_area_low and close <= value_area_high
+
+instant_score = 0
+
+if is_peak_bar
+    instant_score += 20
+else if is_momentum_shift
+    instant_score += 15
+
+if bullish_divergence
+    instant_score += 25
+
+if is_bouncing_support
+    base_support_pts = 20
+    if support_strength >= 3
+        instant_score += base_support_pts + 10
+    else if support_strength >= 2
+        instant_score += base_support_pts + 5
+    else
+        instant_score += base_support_pts
+
+if big_volume_green
+    instant_score += 10
+if wick_rejection
+    instant_score += 10
+if volume_climax
+    instant_score += 15
+
+if poc_magnet
+    instant_score += 10
+
+if bb_squeeze and fear_index > 65
+    instant_score += 5
+
+if round_number_magnet and fear_index > 60
+    instant_score += 5
+
+if is_in_value_area and fear_index > 65
+    instant_score += 5
+
+// FEAR LEVEL BONUS
+if fear_index > 80
+    instant_score += 15
+else if fear_index > 70
+    instant_score += 10
+else if fear_index > 60
+    instant_score += 5
+
+if instant_accel < -3 and fear_index > 65
+    instant_score += 5
+
+instant_score := math.max(0, math.min(100, instant_score))
+
+instant_signal = instant_score >= instant_threshold
+building_signal = instant_score >= instant_threshold * 0.75
+early_signal = instant_score >= instant_threshold * 0.5
+
+signal_color = NEUTRAL_GRAY
+
+if instant_signal
+    signal_color := INSTANT_GOLD
+else if building_signal
+    signal_color := WARNING_GOLD
+else if early_signal  
+    signal_color := EARLY_GOLD
+else
+    if instant_momentum > 0
+        if instant_momentum > 5
+            signal_color := RED_EXTREME
+        else if instant_momentum > 3
+            signal_color := RED_STRONG
+        else if instant_momentum > 1.5
+            signal_color := RED_MODERATE
+        else if instant_momentum > 0.5
+            signal_color := RED_MILD
+        else
+            signal_color := RED_SLIGHT
+    else if instant_momentum < 0
+        if instant_momentum < -5
+            signal_color := GREEN_EXTREME
+        else if instant_momentum < -3
+            signal_color := GREEN_STRONG
+        else if instant_momentum < -1.5
+            signal_color := GREEN_MODERATE
+        else if instant_momentum < -0.5
+            signal_color := GREEN_MILD
+        else
+            signal_color := GREEN_SLIGHT
+    else
+        signal_color := NEUTRAL_GRAY
+
+plot_value = flip_visual ? -fear_index : fear_index
+plot(plot_value, title="Fear Index", color=signal_color, linewidth=histogram_width, style=plot.style_histogram)
+hline(0, title="Baseline", color=color.new(#303030, 0), linestyle=hline.style_solid, linewidth=1)
+
+alertcondition(instant_signal, title="🚨 INSTANT BOTTOM", message="QFA v3 INSTANT BOTTOM | {{ticker}} @ {{close}}")
+alertcondition(building_signal and not building_signal[1], title="⚠️ Building Signal", message="QFA v3 Building Signal | {{ticker}} @ {{close}}")
+alertcondition(bullish_divergence and instant_score >= 40, title="📊 RSI Divergence", message="QFA v3 RSI Divergence | {{ticker}} @ {{close}}")
+alertcondition(is_bouncing_support and support_strength >= 3, title="💎 Strong Support", message="QFA v3 Multi-touch Strong Support | {{ticker}} @ {{close}}")
+alertcondition(volume_climax, title="🔥 VOLUME CLIMAX", message="QFA v3 VOLUME CLIMAX - Reversal Imminent | {{ticker}} @ {{close}}")
+alertcondition(wick_rejection and instant_score >= 30, title="🔨 Hammer Rejection", message="QFA v3 Hammer Rejection | {{ticker}} @ {{close}}")
+alertcondition(is_peak_bar and instant_score >= 35, title="🔄 Momentum Peak", message="QFA v3 Momentum Peak | {{ticker}} @ {{close}}")
+alertcondition(instant_score >= 75, title="⚡ EXTREME Score", message="QFA v3 EXTREME Score | {{ticker}} @ {{close}}")
+
+var performance_table = table.new(position.top_right, 2, 11)
+
+if barstate.islast
+    table.cell(performance_table, 0, 0, "QFA v3.0", text_color=color.white, text_size=size.normal, bgcolor=color.new(#202020, 0))
+    table.cell(performance_table, 1, 0, str.tostring(instant_score, "#"), text_color=instant_signal ? INSTANT_GOLD : building_signal ? WARNING_GOLD : color.white, text_size=size.large, bgcolor=color.new(#202020, 0))
+    
+    row = 1
+    
+    table.cell(performance_table, 0, row, "Fear Level", text_color=color.gray, text_size=size.small)
+    fear_level_text = str.tostring(math.round(fear_index))
+    fear_level_color = fear_index > 80 ? color.red : fear_index > 60 ? color.orange : fear_index > 40 ? color.yellow : color.lime
+    table.cell(performance_table, 1, row, fear_level_text, text_color=fear_level_color, text_size=size.small)
+    row += 1
+    
+    table.cell(performance_table, 0, row, "Vol Regime", text_color=color.gray, text_size=size.small)
+    regime_color = vol_regime == "HIGH" ? color.red : vol_regime == "LOW" ? color.lime : color.gray
+    table.cell(performance_table, 1, row, vol_regime, text_color=regime_color, text_size=size.small)
+    row += 1
+    
+    if enable_momentum
+        table.cell(performance_table, 0, row, "Peak", text_color=color.gray, text_size=size.small)
+        table.cell(performance_table, 1, row, is_peak_bar ? "✓ 20" : is_momentum_shift ? "✓ 15" : "—", text_color=is_peak_bar or is_momentum_shift ? color.lime : color.gray, text_size=size.small)
+        row += 1
+    
+    if enable_divergence
+        table.cell(performance_table, 0, row, "Diverg", text_color=color.gray, text_size=size.small)
+        table.cell(performance_table, 1, row, bullish_divergence ? "✓ 25" : "—", text_color=bullish_divergence ? color.lime : color.gray, text_size=size.small)
+        row += 1
+    
+    if enable_support
+        table.cell(performance_table, 0, row, "Support", text_color=color.gray, text_size=size.small)
+        support_text = is_bouncing_support ? (support_strength >= 3 ? "✓ 30" : support_strength >= 2 ? "✓ 25" : "✓ 20") : "—"
+        table.cell(performance_table, 1, row, support_text, text_color=is_bouncing_support ? color.lime : color.gray, text_size=size.small)
+        row += 1
+    
+    if enable_volume
+        table.cell(performance_table, 0, row, "Volume", text_color=color.gray, text_size=size.small)
+        vol_points = (big_volume_green ? 10 : 0) + (wick_rejection ? 10 : 0) + (volume_climax ? 15 : 0)
+        vol_text = vol_points > 0 ? "✓ " + str.tostring(vol_points) + (volume_climax ? " 🔥" : "") : "—"
+        table.cell(performance_table, 1, row, vol_text, text_color=vol_points > 0 ? (volume_climax ? color.orange : color.lime) : color.gray, text_size=size.small)
+        row += 1
+    
+    if enable_poc
+        table.cell(performance_table, 0, row, "POC", text_color=color.gray, text_size=size.small)
+        poc_text = poc_magnet ? "✓ 10" : "—"
+        table.cell(performance_table, 1, row, poc_text, text_color=poc_magnet ? color.lime : color.gray, text_size=size.small)
+        row += 1
+    
+    table.cell(performance_table, 0, row, "Bonuses", text_color=color.gray, text_size=size.small)
+    bonus_pts = (bb_squeeze ? 5 : 0) + (round_number_magnet ? 5 : 0) + (is_in_value_area ? 5 : 0)
+    bonus_text = bonus_pts > 0 ? "✓ " + str.tostring(bonus_pts) : "—"
+    table.cell(performance_table, 1, row, bonus_text, text_color=bonus_pts > 0 ? color.aqua : color.gray, text_size=size.small)
+    row += 1
+    
+    table.cell(performance_table, 0, row, "Status", text_color=color.gray, text_size=size.small)
+    status_text = instant_signal ? "INSTANT" : building_signal ? "BUILDING" : early_signal ? "EARLY" : "WAIT"
+    status_color = instant_signal ? INSTANT_GOLD : building_signal ? WARNING_GOLD : early_signal ? EARLY_GOLD : color.gray
+    table.cell(performance_table, 1, row, status_text, text_color=status_color, text_size=size.small)
