@@ -1,0 +1,40 @@
+name: python-research-ci
+
+on:
+  pull_request:
+    paths:
+      - "platforms/python/research/nexural-research/**"
+      - ".github/workflows/python-research-ci.yml"
+  push:
+    branches: [ main ]
+    paths:
+      - "platforms/python/research/nexural-research/**"
+      - ".github/workflows/python-research-ci.yml"
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: platforms/python/research/nexural-research
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            platforms/python/research/nexural-research/pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install pytest ruff
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Tests (pytest)
+        run: pytest -q

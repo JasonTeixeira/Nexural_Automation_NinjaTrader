@@ -1,0 +1,5 @@
+Time,Instrument,Account,Order,Action,Type,Quantity,Limit price,Stop price,Fill price,Commission,Profit,Strategy,Market position,OCO,Order state
+8/1/2025 9:54:00 AM,NQ SEP25,Sim101,Entry-001,Sell short,Market,1,,,22864.50,2.88,0.00,NEXAbsorptionFramework,Short,,Filled
+8/1/2025 9:54:00 AM,NQ SEP25,Sim101,Exit-001,Buy to cover,Limit,1,22859.50,,22859.50,2.88,94.24,NEXAbsorptionFramework,Flat,,Filled
+8/1/2025 10:10:00 AM,NQ SEP25,Sim101,Entry-002,Buy,Market,2,,,22870.25,5.76,0.00,NEXAbsorptionFramework,Long,,Filled
+8/1/2025 10:12:00 AM,NQ SEP25,Sim101,Exit-002,Sell,Market,2,,,22865.25,5.76,(188.48),NEXAbsorptionFramework,Flat,,Filled

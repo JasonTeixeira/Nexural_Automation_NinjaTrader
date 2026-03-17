@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual env
+.venv/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data (keep folder structure, not personal datasets)
+data/raw/*
+data/processed/*
+data/exports/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/exports/.gitkeep
+!data/exports/sample_trades.csv
+!data/exports/sample_executions.csv
+
+# Reports / outputs
+reports/*
+!reports/.gitkeep
+
+# Experiments registry and cached artifacts
+experiments/*.duckdb
+experiments/*.sqlite
+experiments/runs/*
+!experiments/runs/.gitkeep
+
+# Environment
+.env

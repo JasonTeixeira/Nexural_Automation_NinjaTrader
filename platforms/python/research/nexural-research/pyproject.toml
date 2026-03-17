@@ -1,0 +1,31 @@
+[build-system]
+requires = ['setuptools>=69', 'wheel']
+build-backend = 'setuptools.build_meta'
+
+[project]
+name = 'nexural-research'
+version = '0.1.0'
+description = 'Local research + analysis environment for NinjaTrader trade exports and order flow strategy iteration.'
+readme = 'README.md'
+requires-python = '>=3.11'
+dependencies = [
+  'pandas>=2.2',
+  'pyyaml>=6.0',
+  'rich>=13.7',
+]
+
+[project.scripts]
+nexural-research = 'nexural_research.cli:main'
+
+[tool.setuptools]
+package-dir = {'' = 'src'}
+
+[tool.setuptools.packages.find]
+where = ['src']
+
+[tool.pytest.ini_options]
+testpaths = ['tests']
+
+[tool.ruff]
+line-length = 100
+target-version = 'py311'
