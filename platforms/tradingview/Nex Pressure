@@ -1,0 +1,444 @@
+//@version=6
+indicator("Nexural Pressure Pro", "Nexural Pressure Pro",
+     overlay=false, max_bars_back=5000, max_labels_count=50) 
+
+// Up/Down volume request lives here
+import TradingView/ta/10 as tvta
+
+//=============================================================================
+// INPUTS
+//=============================================================================
+
+// ── View
+grpView = "View"
+viewMode       = input.string("Both", "View Mode", options=["Split","Overlap","Both"], group=grpView)
+showBackbone   = input.bool(true, "Show Net Pressure Backbone", group=grpView)
+backboneSmooth = input.int(5, "Backbone Smoothing", minval=1, maxval=50, group=grpView)
+showZeroLine   = input.bool(true, "Show Zero Line", group=grpView)
+
+// ── Table
+grpTable = "Info Panel"
+showTable = input.bool(true, "Show Table", group=grpTable)
+panelPos  = input.string("Top Right", "Position", options=["Top Right","Top Left","Bottom Right","Bottom Left"], group=grpTable)
+
+// ── DI Layer
+grpDI = "DI Layer"
+diLen        = input.int(14, "DI Length", minval=1, group=grpDI)
+useVolWeight = input.bool(true, "Volume Weight DI", group=grpDI)
+volClampLow  = input.float(0.25, "Vol Clamp Low", minval=0.05, maxval=1.0, step=0.05, group=grpDI)
+volClampHigh = input.float(2.5, "Vol Clamp High", minval=1.0, maxval=6.0, step=0.1, group=grpDI)
+
+// ── Flow / Delta
+grpFlow = "Flow / Delta"
+ltfMode  = input.string("Auto", "Lower TF Mode", options=["Auto","Aggressive","Conservative","Custom"], group=grpFlow)
+customTF = input.timeframe("1", "Custom Lower TF", group=grpFlow)
+
+// ── Session
+grpSess = "Session"
+useSessionFilter = input.bool(false, "RTH Only (Hide Pre/Post)", group=grpSess)
+rthSession       = input.session("0930-1600", "RTH Session", group=grpSess)
+resetMode        = input.string("RTH", "CVD Reset", options=["None","Daily","RTH"], group=grpSess)
+
+// ── Composite Weights
+grpScore = "Composite Weights"
+wDI   = input.float(0.40, "Weight: DI Imbalance", minval=0, maxval=1, step=0.05, group=grpScore)
+wAgg  = input.float(0.35, "Weight: Aggression", minval=0, maxval=1, step=0.05, group=grpScore)
+wQual = input.float(0.25, "Weight: Quality (EVR)", minval=0, maxval=1, step=0.05, group=grpScore)
+
+// ── Regime / Chop
+grpReg = "Regime / Chop"
+regimeLen   = input.int(40, "Regime Length", minval=10, maxval=200, group=grpReg)
+chopThresh  = input.float(0.55, "Chop Threshold (0..1)", minval=0.3, maxval=0.8, step=0.01, group=grpReg)
+trendBoost  = input.float(1.20, "Trend Boost", minval=1.0, maxval=2.0, step=0.05, group=grpReg)
+chopPenalty = input.float(0.70, "Chop Penalty", minval=0.3, maxval=1.0, step=0.05, group=grpReg)
+
+// ── Activity Gate
+grpGate = "Activity Gate (Suppress Dead Bars)"
+useActivityGate = input.bool(true, "Enable Activity Gate", group=grpGate)
+lowVolGate = input.float(0.60, "Low Volume Gate (volX)", minval=0.2, maxval=1.2, step=0.05, group=grpGate)
+lowAtrGate = input.float(0.55, "Low Range Gate (range/ATR)", minval=0.2, maxval=1.2, step=0.05, group=grpGate)
+gateDecay  = input.float(0.90, "Idle Decay (toward 0)", minval=0.70, maxval=0.99, step=0.01, group=grpGate)
+
+// ── Impulse Emphasis
+grpImp = "Impulse Emphasis"
+useImpulse = input.bool(true, "Enable Impulse Emphasis", group=grpImp)
+impVolX   = input.float(1.50, "Impulse VolX", minval=0.8, maxval=5.0, step=0.05, group=grpImp)
+impDeltaP = input.float(55.0, "Impulse Delta %", minval=20, maxval=95, step=5, group=grpImp)
+impRatio  = input.float(2.5, "Impulse Imb Ratio", minval=1.5, maxval=6.0, step=0.1, group=grpImp)
+impBoost  = input.float(1.35, "Impulse Boost", minval=1.0, maxval=2.5, step=0.05, group=grpImp)
+trailDecay= input.float(0.85, "Impulse Trail Decay", minval=0.60, maxval=0.98, step=0.01, group=grpImp)
+
+// ── Adaptive Filter (zero-lag feel)
+grpAdapt = "Adaptive Filter (Zero-Lag Feel)"
+useAdaptiveFilter = input.bool(true, "Enable Adaptive 2-Speed Filter", group=grpAdapt)
+fastSmooth = input.int(2, "Fast Smooth (Impulse)", minval=1, maxval=20, group=grpAdapt)
+slowSmooth = input.int(12, "Slow Smooth (Chop/Idle)", minval=2, maxval=60, group=grpAdapt)
+adaptStrength = input.float(1.0, "Adapt Strength", minval=0.3, maxval=2.0, step=0.1, group=grpAdapt)
+
+// ── HTF Gate (non-repainting)
+grpHTF = "HTF Gate"
+useHTFGate  = input.bool(true, "Enable HTF Gate", group=grpHTF)
+htfTf       = input.timeframe("15", "HTF Timeframe", group=grpHTF)
+htfStrict   = input.bool(false, "Strict Gate (blocks counter-pressure)", group=grpHTF)
+
+// ── Hysteresis State
+grpHys = "State (Hysteresis)"
+enterBand = input.float(22.0, "Enter Band (+/-)", minval=5, maxval=120, step=1, group=grpHys)
+exitBand  = input.float(12.0, "Exit Band (+/-)", minval=2, maxval=100, step=1, group=grpHys)
+
+// ── Visual
+grpVis = "Visual"
+colHeight    = input.float(1.0, "Column Height Scale", minval=0.2, maxval=6.0, step=0.1, group=grpVis)
+intensityLen = input.int(200, "Intensity Window", minval=50, maxval=800, group=grpVis)
+minAlpha     = input.int(75, "Weak Transparency (0..100)", minval=0, maxval=95, group=grpVis)
+maxAlpha     = input.int(0, "Strong Transparency (0..100)", minval=0, maxval=95, group=grpVis)
+
+//=============================================================================
+// HELPERS
+//=============================================================================
+clamp01(x) => math.min(math.max(x, 0.0), 1.0)
+
+alphaFromLen(len) => 2.0 / (len + 1.0)
+
+ema_alpha(src, alpha) =>
+    var float out = na
+    out := na(out[1]) ? src : (out[1] + alpha * (src - out[1]))
+    out
+
+getLowerTF() =>
+    switch ltfMode
+        "Auto" =>
+            timeframe.isseconds ? "1S" :
+             timeframe.isintraday ? "1" :
+             timeframe.isdaily ? "5" : "60"
+        "Aggressive" =>
+            timeframe.isseconds ? "1S" :
+             timeframe.isintraday ? "1S" :
+             timeframe.isdaily ? "1" : "5"
+        "Conservative" =>
+            timeframe.isseconds ? "1S" :
+             timeframe.isintraday ? "5" :
+             timeframe.isdaily ? "15" : "60"
+        "Custom" => customTF
+        => "1"
+
+panelPosition() =>
+    switch panelPos
+        "Top Right" => position.top_right
+        "Top Left" => position.top_left
+        "Bottom Right" => position.bottom_right
+        "Bottom Left" => position.bottom_left
+        => position.top_right
+
+//=============================================================================
+// SESSION FILTER + RESET LOGIC
+//=============================================================================
+lowerTF = getLowerTF()
+
+inSession = not useSessionFilter or not na(time(timeframe.period, rthSession))
+newDay   = ta.change(time("D")) != 0
+inRTH    = not na(time(timeframe.period, rthSession))
+rthStart = ta.change(inRTH) and inRTH
+doReset  = resetMode == "Daily" ? newDay : resetMode == "RTH" ? rthStart : false
+
+//=============================================================================
+// DI ENGINE (Wilder)
+//=============================================================================
+upMove   = high - high[1]
+downMove = low[1] - low
+plusDM   = (upMove > downMove and upMove > 0) ? upMove : 0.0
+minusDM  = (downMove > upMove and downMove > 0) ? downMove : 0.0
+tr       = ta.tr(true)
+
+smoothTR      = ta.rma(tr, diLen)
+smoothPlusDM  = ta.rma(plusDM, diLen)
+smoothMinusDM = ta.rma(minusDM, diLen)
+
+diPlus  = smoothTR != 0 ? (smoothPlusDM / smoothTR) * 100 : 0.0
+diMinus = smoothTR != 0 ? (smoothMinusDM / smoothTR) * 100 : 0.0
+
+volSMA   = ta.sma(volume, 50)
+volRatio = volSMA != 0 ? volume / volSMA : 1.0
+volMult  = useVolWeight ? math.min(math.max(volRatio, volClampLow), volClampHigh) : 1.0
+
+diPlusW  = diPlus * volMult
+diMinusW = diMinus * volMult
+diImb    = diPlusW - diMinusW
+
+//=============================================================================
+// FLOW DATA (REAL when possible) + FALLBACK
+//=============================================================================
+[upVol, dnVol, tickDelta] = tvta.requestUpAndDownVolume(lowerTF)
+
+buyVolReal  = math.abs(nz(upVol))
+sellVolReal = math.abs(nz(dnVol))
+totalReal   = buyVolReal + sellVolReal
+hasReal     = totalReal > 0
+
+candleRange = high - low
+pricePos    = candleRange > 0 ? (close - low) / candleRange - 0.5 : 0.0
+buySynth    = volume * (0.5 + pricePos)
+sellSynth   = volume * (0.5 - pricePos)
+deltaSynth  = buySynth - sellSynth
+
+buyVol   = hasReal ? buyVolReal : buySynth
+sellVol  = hasReal ? sellVolReal : sellSynth
+totalVol = hasReal ? totalReal : math.max(volume, 1.0)
+delta    = hasReal ? nz(tickDelta) : deltaSynth
+
+buyVol   := inSession ? buyVol : 0.0
+sellVol  := inSession ? sellVol : 0.0
+totalVol := inSession ? totalVol : 0.0
+delta    := inSession ? delta : 0.0
+
+//=============================================================================
+// CVD (reset)
+//=============================================================================
+var float cvd = 0.0
+if doReset
+    cvd := 0.0
+cvd += delta
+
+//=============================================================================
+// METRICS
+//=============================================================================
+isBuyDom = buyVol >= sellVol
+imbRatio = sellVol > 0 ? buyVol / sellVol : 10.0
+imbInv   = buyVol > 0 ? sellVol / buyVol : 10.0
+ratioNow = isBuyDom ? imbRatio : imbInv
+
+deltaPct = totalVol > 0 ? math.abs(delta / totalVol) * 100 : 0.0
+
+atr  = ta.atr(14)
+rng  = high - low
+atrN = atr > 0 ? rng / atr : 0.0
+
+volAvg = ta.sma(totalVol, 50)
+volX   = volAvg > 0 ? totalVol / volAvg : 1.0
+
+// ── Auction close position (continuation clue)
+closePos  = rng > 0 ? (close - low) / rng : 0.5
+auction01 = isBuyDom ? closePos : (1.0 - closePos)
+
+//=============================================================================
+// EVR (Effort vs Result)  — Key institutional-style filter
+//=============================================================================
+progress01 = atr > 0 ? clamp01(math.abs(close - close[1]) / atr) : 0.0
+effort01   = clamp01(volX / 2.0) * clamp01(deltaPct / 70.0)
+
+// Absorption: lots of effort, little progress
+absorb01 = effort01 * (1.0 - progress01)
+
+// Continuation: effort + progress + close near extreme
+cont01 = effort01 * progress01 * clamp01(auction01 / 0.85)
+
+// Signed quality
+qualSigned = (isBuyDom ? 1.0 : -1.0) * (0.55 * cont01 + 0.45 * absorb01) * 100.0
+
+// Aggression signed (delta% + ratio)
+ratioScore = clamp01((ratioNow - 1.0) / math.max(impRatio - 1.0, 1e-6))
+deltaScore = clamp01(deltaPct / math.max(impDeltaP, 1e-6))
+agg01      = clamp01(0.6 * deltaScore + 0.4 * ratioScore)
+aggSigned  = (isBuyDom ? 1.0 : -1.0) * (agg01 * 100.0)
+
+//=============================================================================
+// REGIME (Efficiency Ratio) — chop suppression
+//=============================================================================
+netMove = math.abs(close - close[regimeLen])
+avgMove = ta.sma(math.abs(close - close[1]), regimeLen)
+sumMove = avgMove * regimeLen
+er01    = sumMove > 0 ? clamp01(netMove / sumMove) : 0.0
+
+isChop  = er01 < chopThresh
+regMult = isChop ? chopPenalty : trendBoost
+
+//=============================================================================
+// IMPULSE + TRAIL
+//=============================================================================
+impClassic = (volX >= impVolX and deltaPct >= impDeltaP) or (ratioNow >= impRatio and deltaPct >= (impDeltaP * 0.75))
+isImpulse  = useImpulse ? impClassic : false
+
+var float impulseTrail = 0.0
+if isImpulse
+    impulseTrail := 1.0
+else
+    impulseTrail := impulseTrail * trailDecay
+
+impMult = useImpulse ? (1.0 + (impBoost - 1.0) * impulseTrail) : 1.0
+
+//=============================================================================
+// ACTIVITY GATE
+//=============================================================================
+isIdle   = (volX < lowVolGate) and (atrN < lowAtrGate)
+gateMult = useActivityGate ? (isIdle ? 0.65 : 1.0) : 1.0
+
+//=============================================================================
+// COMPOSITE + HOLD
+//=============================================================================
+rawComposite = (wDI * diImb) + (wAgg * aggSigned) + (wQual * qualSigned)
+rawComposite := rawComposite * regMult * impMult * gateMult
+
+var float rawHold = 0.0
+rawHold := (useActivityGate and isIdle) ? (rawHold[1] * gateDecay) : rawComposite
+
+//=============================================================================
+// ADAPTIVE FILTER
+//=============================================================================
+fastA = alphaFromLen(fastSmooth)
+slowA = alphaFromLen(slowSmooth)
+
+// impulse + vol + regime -> adapt
+adapt01 = clamp01(adaptStrength * (0.45 * (isImpulse ? 1.0 : 0.0) + 0.30 * clamp01(volX / 1.8) + 0.25 * er01))
+adapt01 := (useActivityGate and isIdle) ? 0.0 : adapt01
+
+alpha = useAdaptiveFilter ? (slowA + (fastA - slowA) * adapt01) : alphaFromLen(6)
+pressure = ema_alpha(rawHold, alpha)
+
+// Backbone
+backbone = ta.ema(pressure, backboneSmooth)
+
+//=============================================================================
+// HTF GATE (non-repainting)
+//=============================================================================
+htfBackbone = request.security(syminfo.tickerid, htfTf, backbone, barmerge.gaps_off, barmerge.lookahead_off)
+htfBias     = htfBackbone >= 0 ? 1 : -1
+
+allowBull = not useHTFGate or htfBias == 1
+allowBear = not useHTFGate or htfBias == -1
+
+//=============================================================================
+// HYSTERESIS STATE ENGINE (kills flip-flop)
+//=============================================================================
+var int state = 0   // -1 bear, 0 neutral, +1 bull
+
+enterBull = pressure >  enterBand and allowBull
+enterBear = pressure < -enterBand and allowBear
+
+exitBull  = pressure <  exitBand
+exitBear  = pressure > -exitBand
+
+if state == 0
+    if enterBull
+        state := 1
+    else if enterBear
+        state := -1
+else if state == 1
+    if exitBull
+        state := 0
+    else if htfStrict and useHTFGate and not allowBull
+        state := 0
+else if state == -1
+    if exitBear
+        state := 0
+    else if htfStrict and useHTFGate and not allowBear
+        state := 0
+
+stateTxt = state == 1 ? "BULLISH" : state == -1 ? "BEARISH" : "NEUTRAL"
+regTxt   = isChop ? "CHOP" : "TREND"
+
+//=============================================================================
+// CONFIDENCE (0..1)
+//=============================================================================
+conf01 = clamp01(0.40 * clamp01(volX / 1.8) + 0.30 * agg01 + 0.20 * (isChop ? 0.35 : 1.0) + 0.10 * clamp01(progress01 / 0.7))
+conf01 := (useActivityGate and isIdle) ? conf01 * 0.7 : conf01
+
+//=============================================================================
+// NORMALIZATION / INTENSITY (stable across sessions)
+//=============================================================================
+capPlus  = ta.highest(diPlusW, intensityLen)
+capMinus = ta.highest(diMinusW, intensityLen)
+capPlus  := math.max(capPlus, 1e-6)
+capMinus := math.max(capMinus, 1e-6)
+
+magPlus01  = clamp01(diPlusW  / capPlus)
+magMinus01 = clamp01(diMinusW / capMinus)
+
+alphaPlus  = int(math.round(minAlpha - (minAlpha - maxAlpha) * clamp01(0.55 * conf01 + 0.45 * magPlus01)))
+alphaMinus = int(math.round(minAlpha - (minAlpha - maxAlpha) * clamp01(0.55 * conf01 + 0.45 * magMinus01)))
+
+bullCol  = color.new(color.lime, alphaPlus)
+bearCol  = color.new(color.red,  alphaMinus)
+overBull = color.new(color.lime, math.min(alphaPlus + 18, 90))
+overBear = color.new(color.red,  math.min(alphaMinus + 18, 90))
+
+//=============================================================================
+// PLOTS
+//=============================================================================
+showSplit   = viewMode == "Split" or viewMode == "Both"
+showOverlap = viewMode == "Overlap" or viewMode == "Both"
+
+// Split view (buy up, sell down)
+pBuySplit   = diPlusW   * colHeight
+pSellSplit  = -diMinusW * colHeight
+
+// Overlap view (both positive, transparency reveals dominance)
+pBuyOverlap  = diPlusW  * colHeight
+pSellOverlap = diMinusW * colHeight
+
+plot(showSplit ? pBuySplit : na,   "Buy Pressure (Split)",   color=bullCol, style=plot.style_columns, linewidth=2)
+plot(showSplit ? pSellSplit : na,  "Sell Pressure (Split)",  color=bearCol, style=plot.style_columns, linewidth=2)
+
+plot(showOverlap ? pBuyOverlap : na,   "Buy Pressure (Overlap)",  color=overBull, style=plot.style_columns, linewidth=2)
+plot(showOverlap ? pSellOverlap : na,  "Sell Pressure (Overlap)", color=overBear, style=plot.style_columns, linewidth=2)
+
+// Backbone line (constant linewidth required)
+alphaLine = int(math.round(80 - 70 * conf01))
+alphaLine := math.min(math.max(alphaLine, 5), 85)
+lineCol = backbone >= 0 ? color.new(color.lime, alphaLine) : color.new(color.red, alphaLine)
+plot(showBackbone ? backbone : na, "Net Pressure Backbone", color=lineCol, linewidth=2)
+
+hline(0, "Zero", color=color.new(color.gray, 80), display=showZeroLine ? display.all : display.none)
+
+//=============================================================================
+// INFO TABLE (polished + all signals)
+//=============================================================================
+var table t = table.new(panelPosition(), 2, 11)
+
+stateCol =
+     state == 1 ? color.lime :
+     state == -1 ? color.red : color.gray
+
+if showTable and barstate.islast
+    bg  = color.new(color.black, 85)
+    hdr = color.new(color.white, 0)
+    dim = color.new(color.white, 35)
+
+    table.cell(t, 0, 0, "DI PRESSURE WC++", bgcolor=bg, text_color=hdr, text_size=size.small)
+    table.cell(t, 1, 0, (hasReal ? "REAL" : "SYNTH") + " • " + regTxt, bgcolor=bg, text_color=(hasReal ? color.lime : color.yellow), text_size=size.small)
+
+    table.cell(t, 0, 1, "State", bgcolor=bg, text_color=dim)
+    table.cell(t, 1, 1, stateTxt, bgcolor=bg, text_color=stateCol)
+
+    table.cell(t, 0, 2, "DI+ (Buy)", bgcolor=bg, text_color=dim)
+    table.cell(t, 1, 2, str.tostring(diPlusW, "#.#"), bgcolor=bg, text_color=color.lime)
+
+    table.cell(t, 0, 3, "DI- (Sell)", bgcolor=bg, text_color=dim)
+    table.cell(t, 1, 3, str.tostring(diMinusW, "#.#"), bgcolor=bg, text_color=color.red)
+
+    table.cell(t, 0, 4, "DI Imbalance", bgcolor=bg, text_color=dim)
+    table.cell(t, 1, 4, str.tostring(diImb, "#.#"), bgcolor=bg, text_color=(diImb >= 0 ? color.lime : color.red))
+
+    table.cell(t, 0, 5, "Delta %", bgcolor=bg, text_color=dim)
+    table.cell(t, 1, 5, str.tostring(deltaPct, "#.#"), bgcolor=bg, text_color=(isBuyDom ? color.lime : color.red))
+
+    table.cell(t, 0, 6, "Imb Ratio", bgcolor=bg, text_color=dim)
+    table.cell(t, 1, 6, str.tostring(ratioNow, "#.#") + ":1", bgcolor=bg, text_color=(ratioNow >= impRatio ? color.white : dim))
+
+    table.cell(t, 0, 7, "Absorption", bgcolor=bg, text_color=dim)
+    table.cell(t, 1, 7, str.tostring(absorb01 * 100, "#"), bgcolor=bg, text_color=color.new(color.orange, 0))
+
+    table.cell(t, 0, 8, "Continuation", bgcolor=bg, text_color=dim)
+    table.cell(t, 1, 8, str.tostring(cont01 * 100, "#"), bgcolor=bg, text_color=color.new(color.aqua, 0))
+
+    table.cell(t, 0, 9, "HTF Bias", bgcolor=bg, text_color=dim)
+    table.cell(t, 1, 9, htfBias == 1 ? "BULL" : "BEAR", bgcolor=bg, text_color=(htfBias == 1 ? color.lime : color.red))
+
+    table.cell(t, 0, 10, "Confidence", bgcolor=bg, text_color=dim)
+    table.cell(t, 1, 10, str.tostring(conf01 * 100, "#") + "%", bgcolor=bg,
+        text_color=(conf01 > 0.65 ? color.lime : conf01 > 0.5 ? color.yellow : color.gray))
+
+//=============================================================================
+// ALERTS
+//=============================================================================
+alertcondition(state == 1 and conf01 > 0.55, "Bull Pressure (WC++)", "Bull pressure + confidence")
+alertcondition(state == -1 and conf01 > 0.55, "Bear Pressure (WC++)", "Bear pressure + confidence")
