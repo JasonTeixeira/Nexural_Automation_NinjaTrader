@@ -4,14 +4,24 @@ build-backend = 'setuptools.build_meta'
 
 [project]
 name = 'nexural-research'
-version = '0.1.0'
+version = '0.3.0'
 description = 'Local research + analysis environment for NinjaTrader trade exports and order flow strategy iteration.'
 readme = 'README.md'
 requires-python = '>=3.11'
 dependencies = [
+  # Core
+  'numpy>=2.0',
   'pandas>=2.2',
+  'pydantic>=2.7',
   'pyyaml>=6.0',
   'rich>=13.7',
+
+  # Storage + registry
+  'pyarrow>=16.0',
+  'duckdb>=1.0',
+
+  # Reporting
+  'plotly>=5.22',
 ]
 
 [project.scripts]
