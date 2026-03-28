@@ -1,7 +1,7 @@
 ﻿# Architecture
 
 ## Goals
-- Multi-platform: NinjaTrader (C#), TradingView (Pine v5), future Python research.
+- Multi-platform: NinjaTrader (C#), TradingView (Pine v5), Python research tooling.
 - Contributor-friendly: clear module boundaries and documentation requirements.
 - Safety posture: simulation-first, research-oriented, no performance marketing.
 

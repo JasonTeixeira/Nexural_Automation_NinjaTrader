@@ -4,7 +4,7 @@
 - Git
 - NinjaTrader 8 (for NinjaScript examples)
 - TradingView account (for Pine examples)
-- Python 3.11+ (future tooling)
+- Python 3.11+ (for research tooling)
 
 ## Clone
 ```bash
@@ -24,3 +24,14 @@ This repo focuses on **source organization + documentation standards** first.
 ## TradingView notes
 Pine scripts can be pasted into TradingView’s Pine Editor.
 Keep scripts small, documented, and explicit about assumptions.
+
+## Python research tooling
+
+The Python research toolkit lives under:
+- `platforms/python/research/nexural-research`
+
+Fast setup (recommended):
+
+```powershell
+./scripts/setup.ps1
+```

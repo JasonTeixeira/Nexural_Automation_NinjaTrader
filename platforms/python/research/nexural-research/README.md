@@ -31,6 +31,11 @@ python -m pip install -e .
 # Optional: install the full research stack (not required for the baseline report)
 python -m pip install -r requirements.txt
 
+# Reproducible dev/test install (pinned) with pip-tools
+python -m pip install pip-tools
+pip-sync requirements-dev.lock.txt
+python -m pip install -e .
+
 # Trades export
 nexural-research ingest --input data/exports/sample_trades.csv --output data/processed/trades.parquet
 

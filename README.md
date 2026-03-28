@@ -1,10 +1,14 @@
 ﻿# Nexural Trading Systems (Order Flow Templates + Examples)
 
+[![docs-and-metadata](https://github.com/JasonTeixeira/Nexural_Automation/actions/workflows/docs-and-metadata.yml/badge.svg)](https://github.com/JasonTeixeira/Nexural_Automation/actions/workflows/docs-and-metadata.yml)
+[![module-catalog](https://github.com/JasonTeixeira/Nexural_Automation/actions/workflows/module-catalog.yml/badge.svg)](https://github.com/JasonTeixeira/Nexural_Automation/actions/workflows/module-catalog.yml)
+[![python-research-ci](https://github.com/JasonTeixeira/Nexural_Automation/actions/workflows/python-research-ci.yml/badge.svg)](https://github.com/JasonTeixeira/Nexural_Automation/actions/workflows/python-research-ci.yml)
+
 A practical, open-source monorepo for:
 - **NinjaTrader 8** strategies and indicators (primary)
 - **TradingView Pine Script v5** indicators and strategies (secondary)
 - shared **order flow** research notes, validation checklists, and reusable templates
-- future **Python** research/analytics tooling
+- **Python** research/analytics tooling for NinjaTrader exports
 
 > This project is for **research, education, and simulation-first development**. It is not a signal service.
 
@@ -43,7 +47,7 @@ Each module template includes:
 ## Supported platforms
 - **NinjaTrader 8** (NinjaScript/C#) — primary focus
 - **TradingView** (Pine Script v5)
-- **Python** (planned)
+- **Python** (research tooling included)
 
 See: **[docs/supported-platforms.md](docs/supported-platforms.md)**
 
@@ -68,6 +72,14 @@ See: **[docs/supported-platforms.md](docs/supported-platforms.md)**
 ---
 
 ## Quick start
+
+### Python research (recommended)
+
+```powershell
+./scripts/setup.ps1
+```
+
+See: **[GETTING_STARTED.md](GETTING_STARTED.md)**
 
 ### NinjaTrader users
 1. Browse `platforms/ninjatrader/`.

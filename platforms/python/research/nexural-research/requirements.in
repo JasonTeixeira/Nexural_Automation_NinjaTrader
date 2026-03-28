@@ -1,0 +1,7 @@
+# High-level dev/test requirements (pip-tools input)
+#
+# Note: project runtime deps come from pyproject.toml.
+
+-e .
+pytest
+ruff

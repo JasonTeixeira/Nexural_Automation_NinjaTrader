@@ -1,9 +1,12 @@
-﻿# Python Platform (Planned)
+﻿# Python Platform
 
-This folder is reserved for future Python research and analytics tooling.
+Python tooling lives here.
 
-Expected areas:
-- `research/` notebooks and experiments
-- `analytics/` metrics and analysis utilities
-- `backtesting/` experimental harnesses
-- `utils/` shared helpers
+## Research
+- `research/nexural-research/` — CLI + analytics for NinjaTrader CSV exports
+
+Quickstart:
+
+```powershell
+./scripts/setup.ps1
+```
