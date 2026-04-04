@@ -9,13 +9,11 @@ institutional quant teams to validate strategy robustness.
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
-from typing import Any
 
 import numpy as np
 import pandas as pd
 from scipy import stats as sp_stats
 
-from nexural_research.analyze.equity import max_drawdown
 
 
 # ---------------------------------------------------------------------------
@@ -93,10 +91,6 @@ def parametric_monte_carlo(
     mdd_abs = np.abs(max_drawdowns)
 
     # Probability of >50% drawdown relative to peak equity at that point
-    prob_dd50 = 0.0
-    for i in range(n_simulations):
-        sim_pnl_i = rng.choice(pnl, size=n_trades_per_sim, replace=True) if distribution == "empirical" else None
-        # Use pre-computed data
     # Simplified: use max drawdowns vs final equity
     peak_equities = final_equities + mdd_abs  # rough peak estimate
     prob_dd50 = float(np.mean(mdd_abs > 0.5 * np.maximum(peak_equities, 1e-10)))
@@ -279,7 +273,6 @@ def rolling_walk_forward(
     # Calculate window boundaries
     total_oos = int(n * (1 - in_sample_pct))
     oos_per_window = max(1, total_oos // n_windows)
-    is_size = int(n * in_sample_pct / n_windows) if not anchored else 0
 
     windows: list[WalkForwardWindow] = []
     all_oos_pnl: list[float] = []

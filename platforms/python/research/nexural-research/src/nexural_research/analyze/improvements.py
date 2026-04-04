@@ -20,7 +20,6 @@ import numpy as np
 import pandas as pd
 
 from nexural_research.analyze.advanced_metrics import risk_return_metrics, expectancy_metrics
-from nexural_research.analyze.heatmap import time_heatmap
 
 
 # ---------------------------------------------------------------------------
@@ -390,7 +389,6 @@ def generate_improvement_report(df: pd.DataFrame) -> StrategyImprovementReport:
 
     pnl = pd.to_numeric(df["profit"], errors="coerce").fillna(0.0)
     n = len(pnl)
-    net = float(pnl.sum())
     wins = pnl[pnl > 0]
     losses = pnl[pnl < 0]
     win_rate = float(len(wins) / n) if n > 0 else 0

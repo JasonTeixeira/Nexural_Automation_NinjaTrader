@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 from dataclasses import asdict
 from pathlib import Path
 
@@ -10,15 +9,9 @@ from nexural_research.analyze.execution_quality import execution_quality_from_ex
 from nexural_research.analyze.robustness import monte_carlo_max_drawdown, walk_forward_split
 from nexural_research.analyze.advanced_metrics import (
     comprehensive_analysis,
-    risk_return_metrics,
-    expectancy_metrics,
-    trade_dependency_analysis,
-    distribution_metrics,
-    time_decay_analysis,
 )
 from nexural_research.analyze.advanced_robustness import (
     parametric_monte_carlo,
-    block_bootstrap_monte_carlo,
     rolling_walk_forward,
     deflated_sharpe_ratio,
     regime_analysis,
@@ -233,14 +226,14 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
     for w in rwf.windows:
         print(f"    Window {w.window_id}: IS={w.in_sample_net:>10.2f} (Sharpe {w.in_sample_sharpe:.2f})  OOS={w.out_sample_net:>10.2f} (Sharpe {w.out_sample_sharpe:.2f})  Eff={w.efficiency:.2f}")
 
-    print(f"\n--- Regime Analysis ---")
+    print("\n--- Regime Analysis ---")
     ra = regime_analysis(df)
     for k, v in asdict(ra).items():
         if k != "interpretation":
             print(f"  {k:30s} : {v}")
     print(f"  {'interpretation':30s} : {ra.interpretation}")
 
-    print(f"\n--- Benchmark Comparison ---")
+    print("\n--- Benchmark Comparison ---")
     bm = benchmark_comparison(df)
     for k, v in asdict(bm).items():
         print(f"  {k:30s} : {v}")

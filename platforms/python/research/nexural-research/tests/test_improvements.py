@@ -1,7 +1,6 @@
 """Tests for the strategy improvement engine."""
 
 import pandas as pd
-import pytest
 
 from nexural_research.analyze.improvements import (
     generate_improvement_report,

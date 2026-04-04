@@ -1,8 +1,5 @@
 """Tests for CSV column alias mapping — critical for supporting various NinjaTrader export formats."""
 
-import io
-import tempfile
-from pathlib import Path
 
 import pandas as pd
 import pytest

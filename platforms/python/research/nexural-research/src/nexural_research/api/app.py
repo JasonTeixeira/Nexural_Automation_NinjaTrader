@@ -28,7 +28,6 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from nexural_research.analyze.advanced_metrics import (
-    ComprehensiveMetrics,
     comprehensive_analysis,
     distribution_metrics,
     expectancy_metrics,
@@ -519,7 +518,6 @@ def export_json(session_id: str = Query(default="default")):
 def export_csv(session_id: str = Query(default="default"), filtered: bool = Query(default=False)):
     """Export trades as CSV. If filtered=true, applies recommended time filters."""
     from fastapi.responses import StreamingResponse
-    import io
 
     df = _get_trades(session_id)
 
@@ -730,10 +728,10 @@ def launch(port: int = 8000) -> None:
 
     url = f"http://localhost:{port}"
     threading.Timer(2.0, lambda: webbrowser.open(url)).start()
-    print(f"\n  Nexural Research v1.0.0")
+    print("\n  Nexural Research v1.0.0")
     print(f"  Dashboard:  {url}")
     print(f"  API Docs:   {url}/api/docs")
-    print(f"  Press Ctrl+C to stop\n")
+    print("  Press Ctrl+C to stop\n")
     uvicorn.run("nexural_research.api.app:app", host="127.0.0.1", port=port)
 
 

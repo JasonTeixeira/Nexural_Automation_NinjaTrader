@@ -7,9 +7,6 @@ the analysis engine and sends it to the AI for interpretation.
 
 from __future__ import annotations
 
-import json
-from dataclasses import asdict
-from typing import Any
 
 import pandas as pd
 
@@ -40,10 +37,6 @@ def build_strategy_context(df_trades: pd.DataFrame) -> str:
     dsr = deflated_sharpe_ratio(df_trades, n_trials=100)
     regime = regime_analysis(df_trades)
     bench = benchmark_comparison(df_trades, n_random_sims=500)
-
-    # Trade sample for context
-    sample_wins = df_trades[pd.to_numeric(df_trades["profit"], errors="coerce") > 0].head(3)
-    sample_losses = df_trades[pd.to_numeric(df_trades["profit"], errors="coerce") < 0].head(3)
 
     instruments = df_trades["instrument"].unique().tolist() if "instrument" in df_trades.columns else ["unknown"]
     strategies = df_trades["strategy"].unique().tolist() if "strategy" in df_trades.columns else ["unknown"]
@@ -101,7 +94,7 @@ def build_strategy_context(df_trades: pd.DataFrame) -> str:
 
 ### Regime Analysis
 - {regime.interpretation}
-- Regimes: {', '.join(f'{l} (n={c}, avg=${p:.2f}, Sharpe={s:.2f})' for l, c, p, s in zip(regime.regime_labels, regime.regime_counts, regime.regime_avg_pnl, regime.regime_sharpe))}
+- Regimes: {', '.join(f'{label} (n={cnt}, avg=${avg:.2f}, Sharpe={sr:.2f})' for label, cnt, avg, sr in zip(regime.regime_labels, regime.regime_counts, regime.regime_avg_pnl, regime.regime_sharpe))}
 
 ### Benchmark Comparison
 - Strategy Net: ${bench.strategy_net:,.2f} | Sharpe: {bench.strategy_sharpe}
