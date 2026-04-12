@@ -15,6 +15,7 @@ from nexural_research.api.auth import AuthContext, require_auth
 from nexural_research.api.compat import adapt_sessions
 from nexural_research.api.sessions import MAX_SESSIONS, MAX_UPLOAD_SIZE, delete_persisted_session, persist_session, sessions
 from nexural_research.ingest.detect import ExportKind, detect_export_kind
+from nexural_research.ingest.multi_format import detect_and_load
 from nexural_research.ingest.nt_csv import load_nt_trades_csv
 from nexural_research.ingest.nt_executions_csv import load_nt_executions_csv
 from nexural_research.ingest.nt_optimization_csv import load_nt_optimization_csv
@@ -39,7 +40,19 @@ async def _parse_upload_from_bytes(content: bytes, filename: str) -> tuple[pd.Da
         elif kind == ExportKind.OPTIMIZATION:
             df = load_nt_optimization_csv(tmp_path)
         else:
-            raise HTTPException(400, f"Could not detect export type: {detected.reason}")
+            # Try multi-format auto-detection (TradingView, MetaTrader, IB, TradeStation)
+            try:
+                df, platform = detect_and_load(tmp_path)
+                if "profit" in df.columns:
+                    kind = ExportKind.TRADES
+                    from nexural_research.utils.logging import info
+                    info(f"Auto-detected {platform} format")
+                else:
+                    raise HTTPException(400, f"Could not detect export type. Supported: NinjaTrader, TradingView, MetaTrader, Interactive Brokers, TradeStation")
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(400, f"Could not detect export type: {detected.reason}")
     finally:
         tmp_path.unlink(missing_ok=True)
 
